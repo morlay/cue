@@ -145,6 +145,9 @@ type Config struct {
 	// FindHiddenTasks allows tasks to be defined in hidden fields.
 	FindHiddenTasks bool
 
+	// DisableDynamicTasks disable dynamic tasks, all tasks must be pre-defined.
+	DisableDynamicTasks bool
+
 	// UpdateFunc is called whenever the information in the controller is
 	// updated. This includes directly after initialization. The task may be
 	// nil if this call is not the result of a task completing.

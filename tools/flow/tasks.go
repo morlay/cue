@@ -232,6 +232,7 @@ func (c *Controller) findImpliedTask(d dep.Dependency) *Task {
 func (c *Controller) markTaskDependencies(t *Task, n *adt.Vertex) {
 	cfg := &dep.Config{
 		Dynamic: true,
+		Descend: true,
 	}
 	dep.Visit(cfg, c.opCtx, n, func(d dep.Dependency) error {
 		depTask := c.findImpliedTask(d)

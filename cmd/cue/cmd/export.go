@@ -77,24 +77,31 @@ defined by the files in the current directory.
 
 
 Formats
+
 The following formats are recognized:
 
-json    output as JSON
-               Outputs any CUE value.
+    cue  output as CUE
+              Outputs any CUE value.
 
-text    output as raw text
-                The evaluated value must be of type string.
+   json  output as JSON
+              Outputs any CUE value.
 
-yaml    output as YAML
-                Outputs any CUE value.
+   yaml  output as YAML
+              Outputs any CUE value.
+
+   text  output as raw text
+              The evaluated value must be of type string.
+
+ binary  output as raw binary
+              The evaluated value must be of type string or bytes.
 `,
-
+		// TODO: some formats are missing for sure, like "jsonl" or "textproto" from internal/filetypes/types.cue.
 		RunE: mkRunE(c, runExport),
 	}
 
 	addOutFlags(cmd.Flags(), true)
 	addOrphanFlags(cmd.Flags())
-	addInjectionFlags(cmd.Flags(), false)
+	addInjectionFlags(cmd.Flags(), false, false)
 
 	cmd.Flags().Bool(string(flagEscape), false, "use HTML escaping")
 	cmd.Flags().StringArrayP(string(flagExpression), "e", nil, "export this expression only")
@@ -108,7 +115,6 @@ func runExport(cmd *Command, args []string) error {
 
 	enc, err := encoding.NewEncoder(b.outFile, b.encConfig)
 	exitOnErr(cmd, err, true)
-	defer enc.Close()
 
 	iter := b.instances()
 	defer iter.close()
@@ -118,5 +124,9 @@ func runExport(cmd *Command, args []string) error {
 		exitOnErr(cmd, err, true)
 	}
 	exitOnErr(cmd, iter.err(), true)
+
+	err = enc.Close()
+	exitOnErr(cmd, err, true)
+
 	return nil
 }

@@ -15,9 +15,9 @@
 -->
 [![Go Reference](https://pkg.go.dev/badge/cuelang.org/go.svg)](https://pkg.go.dev/cuelang.org/go)
 [![Github](https://github.com/cue-lang/cue/actions/workflows/trybot.yml/badge.svg)](https://github.com/cue-lang/cue/actions/workflows/trybot.yml?query=branch%3Amaster+event%3Apush)
-[![GolangCI](https://golangci.com/badges/github.com/cue-lang/cue.svg)](https://golangci.com/r/github.com/cue-lang/cue)
-[![Go 1.19+](https://img.shields.io/badge/go-1.19-9cf.svg)](https://golang.org/dl/)
+[![Go 1.21+](https://img.shields.io/badge/go-1.21-9cf.svg)](https://golang.org/dl/)
 [![platforms](https://img.shields.io/badge/platforms-linux|windows|macos-inactive.svg)]()
+[![Docker Image](https://img.shields.io/docker/v/cuelang/cue?sort=semver&label=docker)](https://hub.docker.com/r/cuelang/cue)
 
 # The CUE Data Constraint Language
 
@@ -95,26 +95,25 @@ Some aspects of this are:
 
 [Download](https://github.com/cue-lang/cue/releases) the latest release from GitHub.
 
+#### Run with Docker
+
+The release binaries are published as a Docker image described by our [Dockerfile](Dockerfile):
+
+	docker run cuelang/cue version
+
 #### Install using Homebrew
 
 Using [Homebrew](https://brew.sh), you can install using the CUE Homebrew tap:
 
-```
-brew install cue-lang/tap/cue
-```
+	brew install cue-lang/tap/cue
 
 #### Install from Source
 
-<!-- Keep the following in sync with cmd/cue/cmd/testdata/script/install*.txtar -->
+You need Go 1.21 or later to build CUE from source; follow the instructions at https://go.dev/doc/install.
 
-To install the `cue` command line tool, run:
+To download and install the `cue` command line tool, run:
 
-```
-go install cuelang.org/go/cmd/cue@latest
-```
-
-For more details, see [Installing CUE](./doc/install.md).
-
+	go install cuelang.org/go/cmd/cue@latest
 
 ### Learning CUE
 
@@ -135,11 +134,16 @@ an existing set of Kubernetes configurations is available in
 
 - [`cue` Command line reference](./doc/cmd/cue.md): the `cue` command
 
+### Go release support policy
+
+As a general rule, we support the two most recent major releases of Go,
+matching Go's [security policy](https://go.dev/doc/security/policy).
+For example, if CUE v0.7.0 is released when Go's latest version is 1.21.5,
+v0.7.x including any following bugfix releases will require Go 1.20 or later.
 
 ### Contributing
 
 To contribute, please read the [Contribution Guide](CONTRIBUTING.md).
-
 
 ## Code of Conduct
 
@@ -147,19 +151,16 @@ Guidelines for participating in CUE community spaces and a reporting process for
 handling issues can be found in the [Code of
 Conduct](https://cuelang.org/docs/contribution_guidelines/conduct).
 
-
 ## Contact
 
 You can get in touch with the cuelang community in the following ways:
 
 - Ask questions via [GitHub Discussions](https://github.com/cue-lang/cue/discussions)
-- Chat with us on our
-  [Slack workspace](https://join.slack.com/t/cuelang/shared_invite/enQtNzQwODc3NzYzNTA0LTAxNWQwZGU2YWFiOWFiOWQ4MjVjNGQ2ZTNlMmIxODc4MDVjMDg5YmIyOTMyMjQ2MTkzMTU5ZjA1OGE0OGE1NmE).
+- Chat with us on our [Slack workspace](https://join.slack.com/t/cuelang/shared_invite/enQtNzQwODc3NzYzNTA0LTAxNWQwZGU2YWFiOWFiOWQ4MjVjNGQ2ZTNlMmIxODc4MDVjMDg5YmIyOTMyMjQ2MTkzMTU5ZjA1OGE0OGE1NmE).
+- Subscribe to our [Community Calendar](https://cuelang.org/s/community-calendar) for community calls, demos, office hours, etc
 
 ---
 
 Unless otherwise noted, the CUE source files are distributed
 under the Apache 2.0 license found in the LICENSE file.
-
-This is not an officially supported Google product.
 

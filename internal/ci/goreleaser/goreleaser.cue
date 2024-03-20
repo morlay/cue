@@ -4,32 +4,45 @@ config: {
 	#latest: bool @tag(latest, type=bool)
 
 	project_name: "cue"
+	// Note that gomod.proxy is ignored by `goreleaser release --snapshot`,
+	// which we use in CI to test the goreleaser config and build,
+	// as --snapshot is meant for entirely local builds without a git tag.
 	gomod: proxy: true
-	builds: [{
-		env: [
+
+	// Template based on common settings
+	builds: [...{
+		env: *[
 			"CGO_ENABLED=0",
-		]
-		main:   "./cmd/cue"
-		binary: "cue"
-		ldflags: [
+		] | _
+		ldflags: *[
 			"-s -w",
-		]
-		flags: [
+		] | _
+		flags: *[
 			"-trimpath",
-		]
-		mod_timestamp: '{{ .CommitTimestamp }}'
-		goos: [
+		] | _
+		// Note that goreleaser says that id defaults to the binary name,
+		// but it then complains about "cue" being duplicate even though we use "cue" and "cuepls".
+		id:            binary
+		main:          string
+		binary:        string
+		mod_timestamp: *'{{ .CommitTimestamp }}' | _
+		goos: *[
 			"darwin",
 			"linux",
 			"windows",
-		]
-		goarch: [
+		] | _
+		goarch: *[
 			"amd64",
 			"arm64",
-		]
+		] | _
 	}]
+
+	builds: [
+		{main: "./cmd/cue", binary:    "cue"},
+		{main: "./cmd/cuepls", binary: "cuepls"},
+	]
+
 	archives: [{
-		rlcp:          true
 		name_template: "{{ .ProjectName }}_{{ .Tag }}_{{ .Os }}_{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}{{ if .Mips }}_{{ .Mips }}{{ end }}"
 		files: [
 			"LICENSE",
@@ -45,21 +58,25 @@ config: {
 	release: {
 		disable:    false
 		prerelease: "auto"
+
+		// We manually write the release notes, so they need to be added to a release on GitHub.
+		// We don't want to create the release from scratch without goreleaser,
+		// since goreleaser takes care of creating and uploading the release archives.
+		// We also don't want the release to be fully published by goreleaser,
+		// as otherwise the notification emails go out with the release notes missing.
+		// For those reasons, let goreleaser create the release, but leaving it as a draft.
+		draft: true
 	}
 	checksum: name_template: "checksums.txt"
 	snapshot: name_template: "{{ .Tag }}-next"
-	changelog: {
-		sort: "asc"
-		filters: exclude: [
-			"^test:",
-		]
-	}
+	// As explained above, we write our own release notes.
+	changelog: disable: true
 
 	brews: [{
 		if !#latest {
 			skip_upload: true
 		}
-		tap: {
+		repository: {
 			owner: "cue-lang"
 			name:  "homebrew-tap"
 		}

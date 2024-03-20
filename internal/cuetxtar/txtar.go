@@ -33,6 +33,7 @@ import (
 	"cuelang.org/go/cue/load"
 	"cuelang.org/go/internal/cuetest"
 	"github.com/google/go-cmp/cmp"
+	"github.com/rogpeppe/go-internal/diff"
 	"golang.org/x/tools/txtar"
 )
 
@@ -48,6 +49,12 @@ type TxTarTest struct {
 	//
 	// TODO: by default derive from the current base directory name.
 	Name string
+
+	// Fallback allows the golden tests named by Fallback to pass tests in
+	// case the golden file corresponding to Name does not exist.
+	// The feature can be used to have two implementations of the same
+	// functionality share the same test sets.
+	Fallback string
 
 	// Skip is a map of tests to skip; the key is the test name; the value is the
 	// skip message.
@@ -92,6 +99,7 @@ type Test struct {
 	*testing.T
 
 	prefix   string
+	fallback string
 	buf      *bytes.Buffer // the default buffer
 	outFiles []file
 
@@ -109,14 +117,16 @@ type Test struct {
 func (t *Test) Write(b []byte) (n int, err error) {
 	if t.buf == nil {
 		t.buf = &bytes.Buffer{}
-		t.outFiles = append(t.outFiles, file{t.prefix, t.buf})
+		t.outFiles = append(t.outFiles, file{t.prefix, t.fallback, t.buf, false})
 	}
 	return t.buf.Write(b)
 }
 
 type file struct {
-	name string
-	buf  *bytes.Buffer
+	name     string
+	fallback string
+	buf      *bytes.Buffer
+	diff     bool // true if this contains a diff between fallback and main
 }
 
 // HasTag reports whether the tag with the given key is defined
@@ -201,10 +211,13 @@ func (t *Test) WriteFile(f *ast.File) {
 // in the txtar file. If name is empty, data will be written to the test
 // output and checked against "out/\(testName)".
 func (t *Test) Writer(name string) io.Writer {
+	var fallback string
 	switch name {
 	case "":
 		name = t.prefix
+		fallback = t.fallback
 	default:
+		fallback = path.Join(t.fallback, name)
 		name = path.Join(t.prefix, name)
 	}
 
@@ -215,7 +228,7 @@ func (t *Test) Writer(name string) io.Writer {
 	}
 
 	w := &bytes.Buffer{}
-	t.outFiles = append(t.outFiles, file{name, w})
+	t.outFiles = append(t.outFiles, file{name, fallback, w, false})
 
 	if name == t.prefix {
 		t.buf = w
@@ -268,7 +281,8 @@ func (t *Test) RawInstances(args ...string) []*build.Instance {
 // files in the root directory. Relative files in the archive are given an
 // absolute location by prefixing it with dir.
 func Load(a *txtar.Archive, dir string, args ...string) []*build.Instance {
-	return loadWithConfig(a, dir, load.Config{}, args...)
+	// Don't let Env be nil, as the tests shouldn't depend on os.Environ.
+	return loadWithConfig(a, dir, load.Config{Env: []string{}}, args...)
 }
 
 func loadWithConfig(a *txtar.Archive, dir string, cfg load.Config, args ...string) []*build.Instance {
@@ -326,6 +340,15 @@ func (x *TxTarTest) Run(t *testing.T, f func(tc *Test)) {
 				prefix:     path.Join("out", x.Name),
 				LoadConfig: x.LoadConfig,
 			}
+			// Don't let Env be nil, as the tests shouldn't depend on os.Environ.
+			if tc.LoadConfig.Env == nil {
+				tc.LoadConfig.Env = []string{}
+			}
+			if x.Fallback != "" {
+				tc.fallback = path.Join("out", x.Fallback)
+			} else {
+				tc.fallback = tc.prefix
+			}
 
 			if tc.HasTag("skip") {
 				t.Skip()
@@ -341,12 +364,13 @@ func (x *TxTarTest) Run(t *testing.T, f func(tc *Test)) {
 			update := false
 
 			for i, f := range a.Files {
-
-				if strings.HasPrefix(f.Name, tc.prefix) && (f.Name == tc.prefix || f.Name[len(tc.prefix)] == '/') {
+				hasPrefix := func(s string) bool {
 					// It's either "\(tc.prefix)" or "\(tc.prefix)/..." but not some other name
 					// that happens to start with tc.prefix.
-					tc.hasGold = true
+					return strings.HasPrefix(f.Name, s) && (f.Name == s || f.Name[len(s)] == '/')
 				}
+
+				tc.hasGold = hasPrefix(tc.prefix) || hasPrefix(tc.fallback)
 
 				// Format CUE files as required
 				if tc.HasTag("noformat") || !strings.HasSuffix(f.Name, ".cue") {
@@ -369,11 +393,42 @@ func (x *TxTarTest) Run(t *testing.T, f func(tc *Test)) {
 				index[f.Name] = i
 			}
 
+			// Add diff files between fallback and main file. These are added
+			// as regular output files so that they can be updated as well.
+			for _, sub := range tc.outFiles {
+				if sub.fallback == sub.name {
+					continue
+				}
+				if j, ok := index[sub.fallback]; ok {
+					fallback := a.Files[j].Data
+
+					result := sub.buf.Bytes()
+					if len(result) == 0 || len(fallback) == 0 {
+						continue
+					}
+
+					diff := diff.Diff("old", fallback, "new", result)
+					if len(diff) == 0 {
+						continue
+					}
+
+					tc.outFiles = append(tc.outFiles, file{
+						name: "diff/-" + sub.name + "<==>+" + sub.fallback,
+						buf:  bytes.NewBuffer(diff),
+						diff: true,
+					})
+				}
+			}
+
 			// Insert results of this test at first location of any existing
 			// test or at end of list otherwise.
 			k := len(a.Files)
 			for _, sub := range tc.outFiles {
 				if i, ok := index[sub.name]; ok {
+					k = i
+					break
+				}
+				if i, ok := index[sub.fallback]; ok {
 					k = i
 					break
 				}
@@ -394,6 +449,15 @@ func (x *TxTarTest) Run(t *testing.T, f func(tc *Test)) {
 					if bytes.Equal(gold.Data, result) {
 						continue
 					}
+				} else if i, ok := index[sub.fallback]; ok {
+					gold.Data = a.Files[i].Data
+
+					// Use the golden file of the fallback set if it matches.
+					if bytes.Equal(gold.Data, result) {
+						gold.Name = sub.fallback
+						delete(index, sub.fallback)
+						continue
+					}
 				}
 
 				if cuetest.UpdateGoldenFiles {
@@ -402,9 +466,17 @@ func (x *TxTarTest) Run(t *testing.T, f func(tc *Test)) {
 					continue
 				}
 
+				// Skip the test if just the diff differs.
+				// TODO: also fail once diffs are fully in use.
+				if sub.diff {
+					continue
+				}
+
 				t.Errorf("result for %s differs: (-want +got)\n%s",
 					sub.name,
-					cmp.Diff(string(gold.Data), string(result)))
+					cmp.Diff(string(gold.Data), string(result)),
+				)
+				t.Errorf("actual result: %q", result)
 			}
 
 			// Add remaining unrelated files, ignoring files that were already

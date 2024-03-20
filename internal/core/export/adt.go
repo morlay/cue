@@ -260,6 +260,14 @@ func (e *exporter) adt(env *adt.Environment, expr adt.Elem) ast.Expr {
 		}
 		return ast.NewBinExpr(token.OR, a...)
 
+	case *adt.ConjunctGroup:
+		a := []ast.Expr{}
+		for _, c := range *x {
+			v := e.expr(env, c.Expr())
+			a = append(a, v)
+		}
+		return ast.NewBinExpr(token.AND, a...)
+
 	case *adt.Comprehension:
 		if !x.DidResolve() {
 			return dummyTop
@@ -328,9 +336,12 @@ func (e *exporter) resolve(env *adt.Environment, r adt.Resolver) ast.Expr {
 		// cannot be properly resolved, throwing off the sanitize. Also,
 		// comprehensions originate from a single source and do not need to be
 		// handled.
-		if v := env.Vertex; !v.IsDynamic {
-			if v = v.Lookup(x.Label); v != nil {
-				e.linkIdentifier(v, ident)
+		if env != nil { // for generated stuff
+			// TODO: note that env.Vertex should never be nil; investigate and replace the nil check below.
+			if v := env.Vertex; v != nil && !v.IsDynamic {
+				if v = v.Lookup(x.Label); v != nil {
+					e.linkIdentifier(v, ident)
+				}
 			}
 		}
 

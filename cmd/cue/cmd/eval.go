@@ -42,7 +42,7 @@ configuration file, instead of the entire configuration file itself.
 Examples:
 
   $ cat <<EOF > foo.cue
-  a: [ "a", "b", "c" ]
+  a: ["a", "b", "c"]
   EOF
 
   $ cue eval foo.cue -e a[0] -e a[2]
@@ -54,7 +54,7 @@ Examples:
 
 	addOutFlags(cmd.Flags(), true)
 	addOrphanFlags(cmd.Flags())
-	addInjectionFlags(cmd.Flags(), false)
+	addInjectionFlags(cmd.Flags(), false, false)
 
 	cmd.Flags().StringArrayP(string(flagExpression), "e", nil, "evaluate this expression only")
 

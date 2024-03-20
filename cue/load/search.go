@@ -150,14 +150,12 @@ func (l *loader) matchPackagesInFS(pattern, pkgName string) *match {
 	}
 
 	pkgDir := filepath.Join(root, modDir)
-	// TODO(legacy): remove
-	pkgDir2 := filepath.Join(root, "pkg")
 
 	_ = c.fileSystem.walk(root, func(path string, entry fs.DirEntry, err errors.Error) errors.Error {
 		if err != nil || !entry.IsDir() {
 			return nil
 		}
-		if path == pkgDir || path == pkgDir2 {
+		if path == pkgDir {
 			return skipDir
 		}
 
@@ -188,9 +186,9 @@ func (l *loader) matchPackagesInFS(pattern, pkgName string) *match {
 		// silently skipped as not matching the pattern.
 		// Do not take root, as we want to stay relative
 		// to one dir only.
-		relPath, e := filepath.Rel(c.Dir, path)
-		if e != nil {
-			panic(err) // Should never happen because c.Dir is absolute.
+		relPath, err2 := filepath.Rel(c.Dir, path)
+		if err2 != nil {
+			panic(err2) // Should never happen because c.Dir is absolute.
 		}
 		relPath = "./" + filepath.ToSlash(relPath)
 		// TODO: consider not doing these checks here.
@@ -199,8 +197,6 @@ func (l *loader) matchPackagesInFS(pattern, pkgName string) *match {
 		for _, p := range pkgs {
 			if err := p.Err; err != nil && (p == nil || len(p.InvalidFiles) == 0) {
 				switch err.(type) {
-				case nil:
-					break
 				case *NoFilesError:
 					if c.DataFiles && len(p.OrphanedFiles) > 0 {
 						break

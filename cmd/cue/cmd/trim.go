@@ -92,7 +92,11 @@ removal.
 }
 
 func runTrim(cmd *Command, args []string) error {
-	binst := loadFromArgs(cmd, args, nil)
+	defCfg, err := defaultConfig()
+	if err != nil {
+		return err
+	}
+	binst := loadFromArgs(args, defCfg.loadCfg)
 	if binst == nil {
 		return nil
 	}
@@ -124,7 +128,7 @@ func runTrim(cmd *Command, args []string) error {
 
 	}
 
-	cfg := *defaultConfig.loadCfg
+	cfg := *defCfg.loadCfg
 	cfg.Overlay = overlay
 	tinsts := buildInstances(cmd, load.Instances(args, &cfg), false)
 	if len(tinsts) != len(binst) {

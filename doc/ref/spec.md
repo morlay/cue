@@ -969,7 +969,7 @@ not allowing surrogates.
 The predeclared string type is `string`; it is a defined type.
 
 The length of a string `s` (its size in bytes) can be discovered using
-the built-in function `len`.
+the builtin function `len`.
 
 
 ### Bytes
@@ -1166,9 +1166,9 @@ A dynamic field may be marked as optional or required.
 
 ```
 Expression                             Result
-a:   "foo                              a:   "foo"
+a:   "foo"                             a:   "foo"
 b:   "bar"                             b:   "bar"
-(a): "baz"                             bar: "baz"
+(a): "baz"                             foo: "baz"
 
 (a+b): "qux"                           foobar: "qux"
 
@@ -1951,7 +1951,7 @@ The expression is evaluated in the scope it was declared.
 ## Expressions
 
 An expression specifies the computation of a value by applying operators and
-built-in functions to operands.
+builtin functions to operands.
 
 Expressions that require concrete values are called _incomplete_ if any of
 their operands are not concrete, but define a value that would be legal for
@@ -2625,7 +2625,7 @@ LetClause           = "let" identifier "=" Expression .
 
 ```
 a: [1, 2, 3, 4]
-b: [ for x in a if x > 1 { x+1 } ]  // [3, 4, 5]
+b: [for x in a if x > 1 { x+1 }]  // [3, 4, 5]
 
 c: {
     for x in a
@@ -2669,12 +2669,12 @@ b: "Hello \( a )!" // Hello World!
 
 ## Builtin Functions
 
-Built-in functions are predeclared. They are called like any other function.
+Builtin functions are predeclared. They are called like any other function.
 
 
 ### `len`
 
-The built-in function `len` takes arguments of various types and returns
+The builtin function `len` takes arguments of various types and returns
 a result of type int.
 
 ```
@@ -2708,7 +2708,7 @@ to a fully defined, or closed, struct.
 
 ### `and`
 
-The built-in function `and` takes a list and returns the result of applying
+The builtin function `and` takes a list and returns the result of applying
 the `&` operator to all elements in the list.
 It returns top for the empty list.
 
@@ -2721,7 +2721,7 @@ and([])              _
 
 ### `or`
 
-The built-in function `or` takes a list and returns the result of applying
+The builtin function `or` takes a list and returns the result of applying
 the `|` operator to all elements in the list.
 It returns bottom for the empty list.
 

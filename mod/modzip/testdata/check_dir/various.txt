@@ -1,0 +1,20 @@
+-- want --
+valid:
+$work/valid.cue
+$work/vendor/x/y
+
+omitted:
+$work/.hg_archival.txt: file is inserted by 'hg archive' and is always omitted
+$work/sub/cue.mod/module.cue: file is in another module
+$work/.git: directory is a version control repository
+
+invalid:
+$work/CUE.MOD: cue.mod directories must have lowercase names
+$work/invalid.cue': malformed file path "invalid.cue'": invalid char '\''
+-- valid.cue --
+-- CUE.MOD --
+-- invalid.cue' --
+-- vendor/x/y --
+-- sub/cue.mod/module.cue --
+-- .hg_archival.txt --
+-- .git/x --

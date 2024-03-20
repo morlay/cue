@@ -15,6 +15,7 @@
 package load
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -24,20 +25,19 @@ import (
 	"cuelang.org/go/cue/token"
 )
 
-func testMod(dir string) string {
-	cwd, err := os.Getwd()
-	if err != nil {
-		panic(err)
-	}
-	return filepath.Join(cwd, "testdata", dir)
+func testdata(elems ...string) string {
+	return filepath.Join(append([]string{"testdata"}, elems...)...)
 }
 
 func getInst(pkg, cwd string) (*build.Instance, error) {
-	// Set ModuleRoot to cwd as well; otherwise we walk the parent directories
+	// Set ModuleRoot as well; otherwise we walk the parent directories
 	// all the way to the root of the git repository, causing Go's test caching
 	// to never kick in, as the .git directory almost always changes.
 	// Moreover, it's extra work that isn't useful to the tests.
-	c, _ := (&Config{ModuleRoot: cwd, Dir: cwd}).complete()
+	c, err := (&Config{ModuleRoot: ".", Dir: cwd}).complete()
+	if err != nil {
+		return nil, fmt.Errorf("unexpected error on Config.complete: %v", err)
+	}
 	l := loader{cfg: c}
 	inst := l.newRelInstance(token.NoPos, pkg, c.Package)
 	p := l.importPkg(token.NoPos, inst)[0]
@@ -45,7 +45,12 @@ func getInst(pkg, cwd string) (*build.Instance, error) {
 }
 
 func TestEmptyImport(t *testing.T) {
-	c, _ := (&Config{}).complete()
+	c, err := (&Config{
+		ModuleRoot: ".",
+	}).complete()
+	if err != nil {
+		t.Fatal(err)
+	}
 	l := loader{cfg: c}
 	inst := l.newInstance(token.NoPos, "")
 	p := l.importPkg(token.NoPos, inst)[0]
@@ -61,7 +66,7 @@ func TestEmptyImport(t *testing.T) {
 }
 
 func TestEmptyFolderImport(t *testing.T) {
-	path := filepath.Join(testMod("testmod"), "empty")
+	path := testdata("testmod", "empty")
 	_, err := getInst(".", path)
 	if _, ok := err.(*NoFilesError); !ok {
 		t.Fatalf(`Import(%q) did not return NoCUEError.`, path)
@@ -69,7 +74,7 @@ func TestEmptyFolderImport(t *testing.T) {
 }
 
 func TestMultiplePackageImport(t *testing.T) {
-	path := filepath.Join(testMod("testmod"), "multi")
+	path := testdata("testmod", "multi")
 	_, err := getInst(".", path)
 	mpe, ok := err.(*MultiplePackageError)
 	if !ok {

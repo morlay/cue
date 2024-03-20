@@ -25,16 +25,6 @@ workflows: tip_triggers: _repo.bashWorkflow & {
 		if:        "${{github.repository == '\(_repo.githubRepositoryPath)'}}"
 		steps: [
 			_repo.repositoryDispatch & {
-				name:                  "Trigger tip.cuelang.org deploy"
-				#githubRepositoryPath: _repo.cuelangRepositoryPath
-				#arg: {
-					event_type: "Rebuild tip against ${GITHUB_SHA}"
-					client_payload: {
-						type: "rebuild_tip"
-					}
-				}
-			},
-			_repo.repositoryDispatch & {
 				name:                          "Trigger unity build"
 				#githubRepositoryPath:         _repo.unityRepositoryPath
 				#botGitHubUserTokenSecretsKey: "PORCUEPINE_GITHUB_PAT"

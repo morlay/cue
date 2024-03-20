@@ -246,9 +246,10 @@ func (e *extractor) filter(name string) bool {
 type extractor struct {
 	cmd *Command
 
-	stderr io.Writer
-	pkgs   []*packages.Package
-	done   map[string]bool
+	stderr  io.Writer
+	pkgs    []*packages.Package
+	allPkgs map[string]*packages.Package
+	done    map[string]bool
 
 	// per package
 	orig     map[types.Type]*ast.StructType
@@ -289,10 +290,10 @@ var (
 // They are not used by go/types.Implements.
 
 func typeMethod(name string, params, results []types.Type) *types.Func {
-	return types.NewFunc(token.NoPos, nil, name, typeSignature(name, params, results))
+	return types.NewFunc(token.NoPos, nil, name, typeSignature(params, results))
 }
 
-func typeSignature(name string, params, results []types.Type) *types.Signature {
+func typeSignature(params, results []types.Type) *types.Signature {
 	paramVars := make([]*types.Var, len(params))
 	for i, param := range params {
 		paramVars[i] = types.NewParam(token.NoPos, nil, "", param)
@@ -308,9 +309,6 @@ func typeSignature(name string, params, results []types.Type) *types.Signature {
 		false,
 	)
 }
-
-// TODO(mvdan): Shouldn't we only consider a Go type "top" if it implements both
-// marshal/unmarhal methods of JSON or YAML?
 
 // Note that we record these interfaces without names, so they will show up in
 // the logs like "interface{MarshalJSON() ([]uint8, error)}" rather than
@@ -335,7 +333,7 @@ var toTop = []*types.Interface{
 	// yaml.Unmarshaler: interface { UnmarshalYAML(func(interface{}) error) error }
 	types.NewInterfaceType([]*types.Func{
 		typeMethod("UnmarshalYAML", []types.Type{
-			typeSignature("", []types.Type{typeAny}, []types.Type{typeError}),
+			typeSignature([]types.Type{typeAny}, []types.Type{typeError}),
 		}, []types.Type{typeError}),
 	}, nil).Complete(),
 }
@@ -367,7 +365,7 @@ func extract(cmd *Command, args []string) error {
 	// command specifies a Go package(s) that belong to the main module
 	// and where for some reason the
 	// determine module root:
-	binst := loadFromArgs(cmd, []string{"."}, nil)[0]
+	binst := loadFromArgs([]string{"."}, nil)[0]
 
 	// TODO: require explicitly set root.
 	root := binst.Root
@@ -398,10 +396,11 @@ func extract(cmd *Command, args []string) error {
 	}
 
 	e := extractor{
-		cmd:    cmd,
-		stderr: cmd.Stderr(),
-		pkgs:   pkgs,
-		orig:   map[types.Type]*ast.StructType{},
+		cmd:     cmd,
+		stderr:  cmd.Stderr(),
+		pkgs:    pkgs,
+		allPkgs: map[string]*packages.Package{},
+		orig:    map[types.Type]*ast.StructType{},
 	}
 
 	e.initExclusions(flagExclude.String(cmd))
@@ -410,6 +409,7 @@ func extract(cmd *Command, args []string) error {
 
 	for _, p := range pkgs {
 		e.done[p.PkgPath] = true
+		e.addPackage(p)
 	}
 
 	for _, p := range pkgs {
@@ -418,6 +418,19 @@ func extract(cmd *Command, args []string) error {
 		}
 	}
 	return nil
+}
+
+func (e *extractor) addPackage(p *packages.Package) {
+	if pkg, ok := e.allPkgs[p.PkgPath]; ok {
+		if p != pkg {
+			panic(fmt.Sprintf("duplicate package %s", p.PkgPath))
+		}
+		return
+	}
+	e.allPkgs[p.PkgPath] = p
+	for _, pkg := range p.Imports {
+		e.addPackage(pkg)
+	}
 }
 
 func (e *extractor) recordTypeInfo(p *packages.Package) {
@@ -549,8 +562,7 @@ func (e *extractor) extractPkg(root string, p *packages.Package) error {
 	for path := range e.usedPkgs {
 		if !e.done[path] {
 			e.done[path] = true
-			p := p.Imports[path]
-			if err := e.extractPkg(root, p); err != nil {
+			if err := e.extractPkg(root, e.allPkgs[p.PkgPath]); err != nil {
 				return err
 			}
 		}
@@ -1023,7 +1035,8 @@ func (e *extractor) makeField(name string, kind fieldKind, expr types.Type, doc 
 }
 
 func (e *extractor) makeType(expr types.Type) (result cueast.Expr) {
-	if x, ok := expr.(*types.Named); ok {
+	switch x := expr.(type) {
+	case *types.Named:
 		obj := x.Obj()
 		if obj.Pkg() == nil {
 			return e.ident("_", false)
@@ -1076,10 +1089,52 @@ func (e *extractor) makeType(expr types.Type) (result cueast.Expr) {
 			result = cueast.NewSel(p, "#"+obj.Name())
 			e.usedPkg(pkg.Path())
 		}
-		return
-	}
 
-	switch x := expr.(type) {
+		// TODO(uhthomas): Fields with type parameters should not be
+		// top.
+		//
+		// For example:
+		//
+		// 	type A[T any] struct {
+		// 		SomeField T
+		// 	}
+		//
+		// 	type B A[string]
+		//
+		// Should become:
+		//
+		// 	#A: SomeField: _
+		//
+		// 	#B: #A & {
+		// 		_#T: string
+		// 		SomeField: _#T
+		// 	}
+		//
+		// Or maybe:
+		//
+		// 	#A: {
+		// 		#T: _
+		// 		SomeField: #T
+		// 	}
+		//
+		// 	#B: #A & {
+		// 		#T: string
+		// 	}
+		//
+		// The values of x.TypeParams() and x.TypeArgs() may be helpful.
+
+		// params := x.TypeParams()
+		// args := x.TypeArgs()
+		// if params.Len() > 0 {
+		// 	var fields []any
+		// 	for i := 0; i < params.Len(); i++ {
+		// 		name := params.At(i).Obj().Name()
+		// 		fields = append(fields, e.ident(name, true), e.makeType(args.At(i)))
+		// 	}
+		// 	return cueast.NewBinExpr(cuetoken.AND, result, cueast.NewStruct(fields...))
+		// }
+
+		return result
 	case *types.Pointer:
 		return &cueast.BinaryExpr{
 			X:  cueast.NewNull(),
@@ -1139,17 +1194,48 @@ func (e *extractor) makeType(expr types.Type) (result cueast.Expr) {
 		}
 
 	case *types.Basic:
-		switch t := x.String(); t {
-		case "uintptr":
+		switch x.Kind() {
+		case types.Uintptr, types.UnsafePointer:
 			return e.ident("uint64", false)
-		case "byte":
+		case types.Byte:
 			return e.ident("uint8", false)
-		default:
-			return e.ident(t, false)
+		case types.Complex64, types.Complex128:
+			return e.ident("_", false)
 		}
+		return e.ident(x.String(), false)
+
+	case *types.Union:
+		var exprs []cueast.Expr
+		for i := 0; i < x.Len(); i++ {
+			exprs = append(exprs, e.makeType(x.Term(i).Type()))
+		}
+		return cueast.NewBinExpr(cuetoken.OR, exprs...)
 
 	case *types.Interface:
-		return e.ident("_", false)
+		// TODO(uhthomas): Should interfaces with methods (IsMethodSet)
+		// be set to top?
+		if !x.IsComparable() {
+			return e.ident("_", false)
+		}
+
+		// TODO(uhthomas): Simplify expressions.
+		//
+		// For example:
+		//
+		// 	int | (int | string)
+		//
+		// Should really become:
+		//
+		// 	int | string
+		//
+		var exprs []cueast.Expr
+		for i := 0; i < x.NumEmbeddeds(); i++ {
+			exprs = append(exprs, e.makeType(x.EmbeddedType(i)))
+		}
+		return cueast.NewBinExpr(cuetoken.OR, exprs...)
+
+	case *types.TypeParam:
+		return e.makeType(x.Constraint())
 
 	default:
 		// record error
@@ -1218,15 +1304,15 @@ func (e *extractor) addFields(x *types.Struct, st *cueast.StructLit) {
 		if name == "-" {
 			continue
 		}
+
+		doc := docs[i]
+
 		// TODO: check referrers
 		kind := regular
-		if e.isOptional(tag) {
+		if e.isOptional(f, doc, tag) {
 			kind = optional
 		}
-		if _, ok := f.Type().(*types.Pointer); ok {
-			kind = optional
-		}
-		field, cueType := e.makeField(name, kind, f.Type(), docs[i], count > 0)
+		field, cueType := e.makeField(name, kind, f.Type(), doc, count > 0)
 		add(field)
 
 		if s := reflect.StructTag(tag).Get("cue"); s != "" {
@@ -1241,12 +1327,12 @@ func (e *extractor) addFields(x *types.Struct, st *cueast.StructLit) {
 		typeName := f.Type().String()
 		// simplify type names:
 		for path, info := range e.pkgNames {
-			typeName = strings.Replace(typeName, path+".", info.name+".", -1)
+			typeName = strings.ReplaceAll(typeName, path+".", info.name+".")
 		}
-		typeName = strings.Replace(typeName, e.pkg.Types.Path()+".", "", -1)
+		typeName = strings.ReplaceAll(typeName, e.pkg.Types.Path()+".", "")
 
-		cueStr := strings.Replace(cueType, "_#", "", -1)
-		cueStr = strings.Replace(cueStr, "#", "", -1)
+		cueStr := strings.ReplaceAll(cueType, "_#", "")
+		cueStr = strings.ReplaceAll(cueStr, "#", "")
 
 		// TODO: remove fields in @go attr that are the same as printed?
 		if name != f.Name() || typeName != cueStr {
@@ -1291,8 +1377,8 @@ func (e *extractor) addFields(x *types.Struct, st *cueast.StructLit) {
 				tk := tags.Get("protobuf_key")
 				tv := tags.Get("protobuf_val")
 				if tk != "" && tv != "" {
-					tk = strings.SplitN(tk, ",", 2)[0]
-					tv = strings.SplitN(tv, ",", 2)[0]
+					tk, _, _ = strings.Cut(tk, ",")
+					tv, _, _ = strings.Cut(tv, ",")
 					split[1] = fmt.Sprintf("map[%s]%s", tk, tv)
 				}
 			}
@@ -1321,7 +1407,18 @@ func (e *extractor) isInline(tag string) bool {
 		hasFlag(tag, "yaml", "inline", 1)
 }
 
-func (e *extractor) isOptional(tag string) bool {
+func (e *extractor) isOptional(f *types.Var, doc *ast.CommentGroup, tag string) bool {
+	if _, ok := f.Type().(*types.Pointer); ok {
+		return true
+	}
+
+	for _, line := range strings.Split(doc.Text(), "\n") {
+		before, _, _ := strings.Cut(strings.TrimSpace(line), "=")
+		if before == "+optional" {
+			return true
+		}
+	}
+
 	// TODO: also when the type is a list or other kind of pointer.
 	return hasFlag(tag, "json", "omitempty", 1) ||
 		hasFlag(tag, "yaml", "omitempty", 1)

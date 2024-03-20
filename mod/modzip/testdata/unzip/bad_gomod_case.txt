@@ -1,0 +1,5 @@
+path=example.com/m@v1
+version=v1.0.0
+wantErr=cue.mod directories must have lowercase names
+-- CUE.MOD/module.cue --
+module: "example.com/m"

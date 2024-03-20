@@ -15,7 +15,13 @@
 package cmd
 
 import (
+	"bufio"
+	"strings"
+
 	"github.com/spf13/cobra"
+
+	"cuelang.org/go/internal/mod/modresolve"
+	"cuelang.org/go/mod/modconfig"
 )
 
 // TODO: intersperse the examples at the end of the texts in the
@@ -70,14 +76,14 @@ Simply type ` + c.Name() + ` help [path to command] for full details.`,
 // is taken and works as well as `cue help topic`, which is unnecessary.
 // Consider removing support for the short form at some point.
 
-func newHelpTopics(c *Command) []*cobra.Command {
-	return []*cobra.Command{
-		inputsHelp,
-		flagsHelp,
-		filetypeHelp,
-		injectHelp,
-		commandsHelp,
-	}
+var helpTopics = []*cobra.Command{
+	inputsHelp,
+	environmentHelp,
+	flagsHelp,
+	filetypeHelp,
+	injectHelp,
+	commandsHelp,
+	registryConfigHelp,
 }
 
 var inputsHelp = &cobra.Command{
@@ -144,6 +150,145 @@ $ cue export ./pkg -d Foo foo.yaml
 # Unify data.json with schema.json.
 $ cue export data.json schema: schema.json
 `,
+}
+
+var environmentHelp = &cobra.Command{
+	Use:   "environment",
+	Short: "environment variables",
+	Long: `The cue command consults environment variables for configuration.
+If an environment variable is unset or empty, it uses a sensible default
+setting.
+
+	CUE_CACHE_DIR
+		The directory where the cue command keeps a cache of files to be
+		reused. This defaults to a directory for user-specific temporary
+		cache data, such as:
+
+			"$XDG_CACHE_HOME/cue" or "$HOME/.cache/cue" on Linux
+			"$HOME/Library/Caches/cue" on MacOS
+			"%LocalAppData%/cue" on Windows
+
+	CUE_CONFIG_DIR
+		The directory where the cue command keeps configuration and
+		state files. This defaults to a directory for user-specific
+		configuration data, such as:
+
+			"$XDG_CONFIG_HOME/cue" or "$HOME/.config/cue" on Linux
+			"$HOME/Library/Application Support/cue" on MacOS
+			"%AppData%/cue" on Windows
+
+	CUE_DEBUG
+		Comma-separated list of debug flags to enable. Current possible
+		values are:
+			http
+				Print log messages in JSON format, one per line showing
+				HTTP requests and responses made when interacting with
+				module registries.
+
+	CUE_EXPERIMENT
+		Comma-separated list of experiments to enable. The
+		list of available experiments may change arbitrarily over time.
+		See exp.go in package cuelang.org/go/internal/cueexperiment for
+		currently valid values.
+
+		Warning: This variable is provided for the development and
+		testing of the cue commands itself. Use beyond that purpose is
+		unsupported.
+
+	CUE_REGISTRY
+
+		This variable specifies which registry or registries to use for
+		downloading and publishing modules. See "cue help registryconfig"
+		for details.
+`,
+}
+
+var registryConfigHelp = &cobra.Command{
+	Use:   "registryconfig",
+	Short: "module registry configuration",
+	Long: `The registry configuration determines how CUE maps modules to their locations in
+OCI registries.
+
+Given a particular registry configuration, it's possible to work what registry a
+given module is stored in, and what repository within that registry, without
+making any network calls.
+
+If no explicit registry configuration is present, a default central registry
+(` + modconfig.DefaultRegistry + `) will be used for all modules.
+
+The simplest way of specifying a registry configuration is to set $CUE_REGISTRY
+to the hostname of that registry.
+
+Examples:
+
+	CUE_REGISTRY=myregistry.example
+	CUE_REGISTRY=localhost:5000
+	CUE_REGISTRY='[::1]:5000'
+
+If a path is present too, all modules will be stored under that path.
+
+For example:
+
+	CUE_REGISTRY=localhost:5000/all/modules/will/be/stored/here
+
+By default for hosts other than localhost, a secure (HTTPS) connection will be
+used. This default can be set by appending "+insecure" or "+secure".
+
+For example:
+
+	CUE_REGISTRY=100.98.141.117:5000+insecure
+	CUE_REGISTRY=localhost:5000/modules+secure
+
+When specified in this way, the registry is used to fetch all modules.
+
+To use a specific registry for only certain subsets of modules, a prefix can be
+specified. This constrains a registry to be used only for modules that match
+that prefix. If there are multiple registries with a prefix, the longest
+matching prefix wins. When matching a prefix, only complete path elements
+(non-slash characters) are considered. It's an error if there are two identical
+prefixes in the same registry configuration.
+
+For example:
+
+	CUE_REGISTRY='foo.example/bar=localhost:5000,myregistry.example'
+
+In the above example, modules with the prefix "foo.example/bar", such as
+"foo.example/bar/somemodule" (but not "foo.example/barry"), will be fetched from
+the registry at localhost:5000. All other modules will be fetched from
+"myregistry.example".
+
+Note that the syntax above implies that the ordering of the elements in
+CUE_REGISTRY isn't important because the resolution algorithm is
+order-independent.
+
+
+Customizing Name Resolution
+
+Some registries have restrictions on what repositories can be used. For example,
+a registry implementation might restrict the depth of the available repository
+paths, or might even provide access to a single repository only. In order to
+accommodate these kinds of limitation, a registry configuration can also be
+specified in CUE syntax, usually as a configuration file.
+
+To do this, set CUE_REGISTRY to "file:" followed by the path to the
+configuration file. For example:
+
+	CUE_REGISTRY=file:/home/alice/.config/cue/registry.cue
+
+To remove ambiguity, the simpler syntax described earlier can be explicitly
+requested with the "simple:" prefix. For example:
+
+	CUE_REGISTRY=simple:myregistry.example
+
+If it is preferable not to create a file on disk for the configuration, the
+"inline:" prefix can be used:
+
+	CUE_REGISTRY='inline:defaultRegistry: registry: "myregistry.example"'
+
+The configuration file syntax is described by the following CUE #file schema
+definition:
+
+` + indent(modresolve.RegistryConfigSchema()),
 }
 
 var flagsHelp = &cobra.Command{
@@ -571,6 +716,22 @@ cuelang.org/go/pkg/tool/tool.cue.
 		$after?: Task | [...Task]
 	}
 `,
+}
+
+// indent returns s with all lines indented by one tab.
+func indent(s string) string {
+	var buf strings.Builder
+	for scan := bufio.NewScanner(strings.NewReader(s)); scan.Scan(); {
+		line := scan.Bytes()
+		if len(line) == 0 {
+			buf.WriteString("\n")
+			continue
+		}
+		buf.WriteString("\t")
+		buf.Write(line)
+		buf.WriteString("\n")
+	}
+	return buf.String()
 }
 
 // TODO: tags

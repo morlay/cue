@@ -75,6 +75,7 @@ workflows: trybot: _repo.bashWorkflow & {
 				_goTestRace & {
 					if: _isLatestLinux
 				},
+				for v in _e2eTestSteps {v},
 				_goCheck,
 				_repo.checkGitClean,
 			]
@@ -114,6 +115,46 @@ workflows: trybot: _repo.bashWorkflow & {
 		run:  "go test ./..."
 	}
 
+	_e2eTestSteps: [... json.#step & {
+		// The end-to-end tests require a github token secret and are a bit slow,
+		// so we only run them on pushes to protected branches and on one
+		// environment in the source repo.
+		if: "github.repository == '\(_repo.githubRepositoryPath)' && \(_repo.isProtectedBranch) && \(_isLatestLinux)"
+	}] & [
+		// Two setup steps per the upstream docs:
+		// https://github.com/google-github-actions/setup-gcloud#service-account-key-json
+		{
+			name: "gcloud auth for end-to-end tests"
+			id:   "auth"
+			uses: "google-github-actions/auth@v2"
+			// E2E_GCLOUD_KEY is a key for the service account cue-e2e-ci,
+			// which has the Artifact Registry Repository Administrator role.
+			with: credentials_json: "${{ secrets.E2E_GCLOUD_KEY }}"
+		},
+		{
+			name: "gcloud setup for end-to-end tests"
+			uses: "google-github-actions/setup-gcloud@v2"
+		},
+		{
+			name: "End-to-end test"
+			// The secret is the fine-grained access token "cue-lang/cue ci e2e for modules-testing"
+			// owned by the porcuepine bot account with read+write access to repo administration and code
+			// on the entire cue-labs-modules-testing org. Note that porcuepine is also an org admin,
+			// since otherwise the repo admin access to create and delete repos does not work.
+			env: {
+				CUE_LOGINS: "${{ secrets.E2E_CUE_LOGINS }}"
+			}
+			// Our regular tests run with both `go test ./...` and `go test -race ./...`.
+			// The end-to-end tests should only be run once, given the slowness and API rate limits.
+			// We want to catch any data races they spot as soon as possible, and they aren't CPU-bound,
+			// so running them only with -race seems reasonable.
+			run: """
+				cd internal/_e2e
+				go test -race
+				"""
+		},
+	]
+
 	_goCheck: json.#step & {
 		// These checks can vary between platforms, as different code can be built
 		// based on GOOS and GOARCH build tags.
@@ -123,11 +164,15 @@ workflows: trybot: _repo.bashWorkflow & {
 		// TODO: consider adding more checks as per https://github.com/golang/go/issues/42119.
 		if:   "\(_isLatestLinux)"
 		name: "Check"
-		run:  "go vet ./..."
+		run: """
+			go vet ./...
+			go mod tidy
+			"""
 	}
 
 	_goTestRace: json.#step & {
 		name: "Test with -race"
-		run:  "go test -race ./..."
+		env: GORACE: "atexit_sleep_ms=10" // Otherwise every Go package being tested sleeps for 1s; see https://go.dev/issues/20364.
+		run: "go test -race ./..."
 	}
 }

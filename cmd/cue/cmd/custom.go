@@ -17,7 +17,6 @@ package cmd
 // This file contains code or initializing and running custom commands.
 
 import (
-	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -153,8 +152,8 @@ func doTasks(cmd *Command, typ, command string, root *cue.Instance) error {
 
 	c := flow.New(cfg, root, newTaskFunc(cmd))
 
-	err := c.Run(context.Background())
-	exitIfErr(cmd, root, err, true)
+	err := c.Run(backgroundContext())
+	exitOnErr(cmd, err, true)
 
 	return err
 }
@@ -221,8 +220,10 @@ func newTaskFunc(cmd *Command) flow.TaskFunc {
 				return nil, errors.Promote(err1, "newTask")
 			}
 		}
+		var isLegacy bool
 		if k, ok := legacyKinds[kind]; ok {
 			kind = k
+			isLegacy = true
 		}
 		rf := itask.Lookup(kind)
 		if rf == nil {
@@ -242,12 +243,17 @@ func newTaskFunc(cmd *Command) flow.TaskFunc {
 		}
 
 		return flow.RunnerFunc(func(t *flow.Task) error {
+			obj := t.Value()
+
+			if isLegacy {
+				obj = obj.Unify(v)
+			}
 			c := &itask.Context{
 				Context: t.Context(),
 				Stdin:   cmd.InOrStdin(),
 				Stdout:  cmd.OutOrStdout(),
 				Stderr:  cmd.OutOrStderr(),
-				Obj:     t.Value(),
+				Obj:     obj,
 			}
 			value, err := runner.Run(c)
 			if err != nil {
@@ -265,24 +271,22 @@ func init() {
 	itask.Register("cmd/cue/cmd.Test", newTestServerCmd)
 }
 
-var testOnce sync.Once
+var testServerOnce = sync.OnceValue(func() string {
+	s := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, req *http.Request) {
+			data, _ := io.ReadAll(req.Body)
+			d := map[string]interface{}{
+				"data": string(data),
+				"when": "now",
+			}
+			enc := json.NewEncoder(w)
+			_ = enc.Encode(d)
+		}))
+	return s.URL
+})
 
 func newTestServerCmd(v cue.Value) (itask.Runner, error) {
-	server := ""
-	testOnce.Do(func() {
-		s := httptest.NewServer(http.HandlerFunc(
-			func(w http.ResponseWriter, req *http.Request) {
-				data, _ := io.ReadAll(req.Body)
-				d := map[string]interface{}{
-					"data": string(data),
-					"when": "now",
-				}
-				enc := json.NewEncoder(w)
-				_ = enc.Encode(d)
-			}))
-		server = s.URL
-	})
-	return testServerCmd(server), nil
+	return testServerCmd(testServerOnce()), nil
 }
 
 type testServerCmd string

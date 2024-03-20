@@ -1,4 +1,4 @@
-// Copyright 2018 The CUE Authors
+// Copyright 2018 CUE Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -43,41 +43,44 @@ import (
 
 var requestedVersion = os.Getenv("CUE_SYNTAX_OVERRIDE")
 
-var defaultConfig = config{
-	loadCfg: &load.Config{
-		ParseFile: func(name string, src interface{}) (*ast.File, error) {
-			version := internal.APIVersionSupported
-			if requestedVersion != "" {
-				switch {
-				case strings.HasPrefix(requestedVersion, "v0.1"):
-					version = -1000 + 100
+func defaultConfig() (*config, error) {
+	reg, err := getCachedRegistry()
+	if err != nil {
+		return nil, err
+	}
+	return &config{
+		loadCfg: &load.Config{
+			ParseFile: func(name string, src interface{}) (*ast.File, error) {
+				version := internal.APIVersionSupported
+				if requestedVersion != "" {
+					switch {
+					case strings.HasPrefix(requestedVersion, "v0.1"):
+						version = -1000 + 100
+					}
 				}
-			}
-			options := []parser.Option{
-				parser.FromVersion(version),
-				parser.ParseComments,
-			}
-			// TODO: consolidate all options into a single CUE_DEBUG variable.
-			if os.Getenv("CUE_DEBUG_PARSER_TRACE") != "" {
-				options = append(options, parser.Trace)
-			}
-			return parser.ParseFile(name, src, options...)
+				options := []parser.Option{
+					parser.FromVersion(version),
+					parser.ParseComments,
+				}
+				// TODO: consolidate all options into a single CUE_DEBUG variable.
+				if os.Getenv("CUE_DEBUG_PARSER_TRACE") != "" {
+					options = append(options, parser.Trace)
+				}
+				return parser.ParseFile(name, src, options...)
+			},
+			Registry: reg,
 		},
-	},
+	}, nil
 }
 
 var inTest = false
-
-func exitIfErr(cmd *Command, inst *cue.Instance, err error, fatal bool) {
-	exitOnErr(cmd, err, fatal)
-}
 
 func getLang() language.Tag {
 	loc := os.Getenv("LC_ALL")
 	if loc == "" {
 		loc = os.Getenv("LANG")
 	}
-	loc = strings.Split(loc, ".")[0]
+	loc, _, _ = strings.Cut(loc, ".")
 	return language.Make(loc)
 }
 
@@ -108,7 +111,7 @@ func exitOnErr(cmd *Command, err error, fatal bool) {
 	}
 }
 
-func loadFromArgs(cmd *Command, args []string, cfg *load.Config) []*build.Instance {
+func loadFromArgs(args []string, cfg *load.Config) []*build.Instance {
 	binst := load.Instances(args, cfg)
 	if len(binst) == 0 {
 		return nil
@@ -376,12 +379,20 @@ type config struct {
 	loadCfg *load.Config
 }
 
-func newBuildPlan(cmd *Command, args []string, cfg *config) (p *buildPlan, err error) {
+func newBuildPlan(cmd *Command, cfg *config) (p *buildPlan, err error) {
+	var defCfg *config
+	if cfg == nil || cfg.loadCfg == nil {
+		var err error
+		defCfg, err = defaultConfig()
+		if err != nil {
+			return nil, err
+		}
+	}
 	if cfg == nil {
-		cfg = &defaultConfig
+		cfg = defCfg
 	}
 	if cfg.loadCfg == nil {
-		cfg.loadCfg = defaultConfig.loadCfg
+		cfg.loadCfg = defCfg.loadCfg
 	}
 	cfg.loadCfg.Stdin = cmd.InOrStdin()
 
@@ -400,9 +411,7 @@ func newBuildPlan(cmd *Command, args []string, cfg *config) (p *buildPlan, err e
 	}
 	cfg.reFile = re
 
-	if err := setTags(cmd.Flags(), cfg.loadCfg); err != nil {
-		return nil, err
-	}
+	setTags(cfg.loadCfg, cmd.Flags(), cmd.Parent().Flags())
 
 	return p, nil
 }
@@ -411,13 +420,17 @@ func (p *buildPlan) matchFile(file string) bool {
 	return p.cfg.reFile.MatchString(file)
 }
 
-func setTags(f *pflag.FlagSet, cfg *load.Config) error {
-	tags, _ := f.GetStringArray(string(flagInject))
-	cfg.Tags = tags
-	if b, _ := f.GetBool(string(flagInjectVars)); b {
-		cfg.TagVars = load.DefaultTagVars()
+func setTags(cfg *load.Config, flags ...*pflag.FlagSet) {
+	// setTags usually receives a subcommmand's flags, plus the parent (root) command's flags,
+	// so that we can support "cue cmd -t foo=bar mycmd" as well as the short form "cue -t foo=bar mycmd".
+	// TODO: once we remove "cue cmd" short-hand support, go back to a single FlagSet parameter.
+	for _, f := range flags {
+		tags, _ := f.GetStringArray(string(flagInject))
+		cfg.Tags = append(cfg.Tags, tags...)
+		if b, _ := f.GetBool(string(flagInjectVars)); b {
+			cfg.TagVars = load.DefaultTagVars()
+		}
 	}
-	return nil
 }
 
 type decoderInfo struct {
@@ -518,14 +531,14 @@ func (p *buildPlan) importFiles(b *build.Instance) error {
 }
 
 func parseArgs(cmd *Command, args []string, cfg *config) (p *buildPlan, err error) {
-	p, err = newBuildPlan(cmd, args, cfg)
+	p, err = newBuildPlan(cmd, cfg)
 	if err != nil {
 		return nil, err
 	}
 
 	adt.DebugSort, _ = strconv.Atoi(os.Getenv("CUE_DEBUG_SORT_ARCS"))
 
-	builds := loadFromArgs(cmd, args, cfg.loadCfg)
+	builds := loadFromArgs(args, cfg.loadCfg)
 	if builds == nil {
 		return nil, errors.Newf(token.NoPos, "invalid args")
 	}
@@ -722,7 +735,7 @@ func buildInstances(cmd *Command, binst []*build.Instance, ignoreErrors bool) []
 	// If there are no files and User is true, then use those?
 	// Always use all files in user mode?
 	instances, err := cmd.ctx.BuildInstances(binst)
-	exitIfErr(cmd, nil, err, true)
+	exitOnErr(cmd, err, true)
 
 	insts := make([]*instance, len(instances))
 	for i, v := range instances {
@@ -742,12 +755,12 @@ func buildInstances(cmd *Command, binst []*build.Instance, ignoreErrors bool) []
 	for _, inst := range instances {
 		// TODO: consider merging errors of multiple files, but ensure
 		// duplicates are removed.
-		exitIfErr(cmd, nil, inst.Validate(), !flagIgnore.Bool(cmd))
+		exitOnErr(cmd, inst.Validate(), !flagIgnore.Bool(cmd))
 	}
 	return insts
 }
 
-func buildToolInstances(cmd *Command, binst []*build.Instance) ([]*cue.Instance, error) {
+func buildToolInstances(binst []*build.Instance) ([]*cue.Instance, error) {
 	instances := cue.Build(binst)
 	for _, inst := range instances {
 		if inst.Err != nil {
@@ -765,15 +778,16 @@ func buildToolInstances(cmd *Command, binst []*build.Instance) ([]*cue.Instance,
 }
 
 func buildTools(cmd *Command, args []string) (*cue.Instance, error) {
-	cfg := &load.Config{
-		Tools: true,
-	}
-	f := cmd.cmd.Flags()
-	if err := setTags(f, cfg); err != nil {
+	cfg, err := defaultConfig()
+	if err != nil {
 		return nil, err
 	}
+	loadCfg := *cfg.loadCfg
+	loadCfg.Tools = true
+	f := cmd.cmd.Flags()
+	setTags(&loadCfg, f, cmd.cmd.Parent().Flags())
 
-	binst := loadFromArgs(cmd, args, cfg)
+	binst := loadFromArgs(args, &loadCfg)
 	if len(binst) == 0 {
 		return nil, nil
 	}
@@ -796,7 +810,7 @@ func buildTools(cmd *Command, args []string) (*cue.Instance, error) {
 		inst.Files = inst.Files[:k]
 	}
 
-	insts, err := buildToolInstances(cmd, binst)
+	insts, err := buildToolInstances(binst)
 	if err != nil {
 		return nil, err
 	}

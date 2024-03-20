@@ -48,14 +48,14 @@ graph TD
 }
 -- out/run/t1/stats --
 Leaks:  0
-Freed:  42
-Reused: 35
+Freed:  47
+Reused: 40
 Allocs: 7
 Retain: 0
 
-Unifications: 25
-Conjuncts:    65
-Disjuncts:    42
+Unifications: 26
+Conjuncts:    70
+Disjuncts:    47
 -- out/run/t2 --
 graph TD
   t0("root.get [Terminated]")
@@ -66,11 +66,12 @@ graph TD
 {
 	$id: "tool/exec.Run"
 	cmd: "go run cuelang.org/go/cmd/cue import -f -p json -l #Workflow: jsonschema: - --outfile pkg/github.com/SchemaStore/schemastore/src/schemas/json/github-workflow.cue"
-	env: {}
-	stdout:  "foo"
-	stderr:  null
-	stdin:   (*null | string | bytes) & GET.response.body
-	success: bool
+	env: {} | []
+	stdout:      "foo"
+	stderr:      null
+	stdin:       (*null | string | bytes) & GET.response.body
+	success:     bool
+	mustSucceed: true
 
 	//cue:path: root.get
 	let GET = {
@@ -90,24 +91,24 @@ graph TD
 }
 -- out/run/t2/stats --
 Leaks:  0
-Freed:  42
-Reused: 42
+Freed:  47
+Reused: 47
 Allocs: 0
 Retain: 0
 
-Unifications: 25
-Conjuncts:    69
-Disjuncts:    42
+Unifications: 26
+Conjuncts:    74
+Disjuncts:    47
 -- out/run/stats/totals --
 Leaks:  0
-Freed:  84
-Reused: 77
+Freed:  94
+Reused: 87
 Allocs: 7
 Retain: 0
 
-Unifications: 50
-Conjuncts:    134
-Disjuncts:    84
+Unifications: 52
+Conjuncts:    144
+Disjuncts:    94
 -- out/run/t3 --
 graph TD
   t0("root.get [Terminated]")

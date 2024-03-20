@@ -1,0 +1,95 @@
+# Test that we can authenticate to a registry with bearer token auth via logins.json.
+# We use multiple dependencies to test concurrent fetches as well, to catch races.
+
+env CUE_CONFIG_DIR=$WORK/cueconfig
+env-fill $CUE_CONFIG_DIR/logins.json
+exec cue export .
+cmp stdout expect-stdout
+
+# Sanity-check that we get an error when using the wrong token.
+env CUE_CACHE_DIR=$WORK/.tmp/different-cache
+env-fill cueconfig/badtoken.json
+cp cueconfig/badtoken.json cueconfig/logins.json
+! exec cue export .
+stderr 'import failed: cannot find package .* 401 Unauthorized; body: "invalid credentials'
+
+# An invalid logins.json should result in an immediate error.
+env CUE_CONFIG_DIR=$WORK/badconfig
+! exec cue export .
+stderr 'cannot load CUE registry logins: json: cannot unmarshal string into Go struct field'
+
+# Setting CUE_CONFIG_DIR to an empty directory should still try Docker auth.
+# Note that Docker auth fails entirely, but we don't refuse to continue without a logins.json.
+env CUE_CONFIG_DIR=$WORK/emptyconfig
+mkdir $CUE_CONFIG_DIR
+! exec cue export .
+stderr 'module example.com/e1@v0.0.1: cannot do HTTP request'
+
+# If no CUE_CONFIG_DIR is set and we can't find its default location,
+# we should still carry on with Docker auth assuming that logins.json does not exist.
+env HOME= CUE_CONFIG_DIR=
+exec env
+! exec cue export .
+stderr 'module example.com/e1@v0.0.1: cannot do HTTP request'
+-- cueconfig/logins.json --
+{
+	"registries": {
+		"${DEBUG_REGISTRY_HOST}": {
+			"access_token": "goodtoken"
+		}
+	}
+}
+-- cueconfig/badtoken.json --
+{
+	"registries": {
+		"${DEBUG_REGISTRY_HOST}": {
+			"access_token": "badtoken"
+		}
+	}
+}
+-- badconfig/logins.json --
+{"registries": "unexpected json"}
+-- expect-stdout --
+[
+    "ok1",
+    "ok2",
+    "ok3"
+]
+-- main.cue --
+package main
+import "example.com/e1"
+import "example.com/e2"
+import "example.com/e3"
+
+[e1.foo, e2.foo, e3.foo]
+
+-- cue.mod/module.cue --
+module: "test.org"
+deps: "example.com/e1": v: "v0.0.1"
+deps: "example.com/e2": v: "v0.0.1"
+deps: "example.com/e3": v: "v0.0.1"
+-- _registry/auth.json --
+{"bearerToken": "goodtoken"}
+-- _registry_prefix --
+somewhere/other
+-- _registry/example.com_e1_v0.0.1/cue.mod/module.cue --
+module: "example.com/e1@v0"
+
+-- _registry/example.com_e1_v0.0.1/main.cue --
+package e1
+
+foo: "ok1"
+-- _registry/example.com_e2_v0.0.1/cue.mod/module.cue --
+module: "example.com/e2@v0"
+
+-- _registry/example.com_e2_v0.0.1/main.cue --
+package e2
+
+foo: "ok2"
+-- _registry/example.com_e3_v0.0.1/cue.mod/module.cue --
+module: "example.com/e3@v0"
+
+-- _registry/example.com_e3_v0.0.1/main.cue --
+package e3
+
+foo: "ok3"

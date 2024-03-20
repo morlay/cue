@@ -64,6 +64,11 @@ inherently distributed nature of open-source this coordination is important
 because it very often serves as the main form of communication between
 contributors.
 
+You can also exchange ideas or feedback with other contributors via the
+`#contributing` [Slack channel](https://cuelang.slack.com/archives/CMY132JKY),
+as well as the contributor office hours calls which we hold via the
+[community calendar](https://cuelang.org/s/community-calendar) once per week.
+
 ### Check the issue tracker
 
 Whether you already know what contribution to make, or you are searching for an
@@ -114,7 +119,7 @@ href="mailto:security@cuelang.org">security@cuelang.org</a>.
 The code contribution process used by the CUE project is a little different from
 that used by other open source projects.  We assume you have a basic
 understanding of [`git`](https://git-scm.com/) and [Go](https://golang.org)
-(1.19 or later).
+(1.21 or later).
 
 The first thing to decide is whether you want to contribute a code change via
 GitHub or GerritHub. Both workflows are fully supported, and whilst GerritHub is
@@ -322,7 +327,7 @@ follow:
 - **Step 0**: Review the guidelines on [Good Commit Messages](#good-commit-messages), [The Review Process](#the-review-process) and [Miscellaneous Topics](#miscellaneous-topics)
 - **Step 1**: Decide which email address you want to use for contributions.
 - **Step 2**: Set up a [GerritHub](http://gerrithub.io/) account.
-- **Step 3**: Install `git-codereview`
+- **Step 3**: [Install `git-codereview`](#step-3-install-the-git-codereview-command)
 - **Step 4**: Clone the CUE repository locally.
 
 
@@ -389,8 +394,6 @@ issue](https://cuelang.org/issues/new).
 Changes to CUE must be reviewed before they are accepted, no matter who makes
 the change.  A custom `git` command called `git-codereview` simplifies sending
 changes to Gerrit.
-
-<!-- Keep the following in sync with cmd/cue/cmd/testdata/script/contributing_install*.txtar -->
 
 Install the `git-codereview` command by running,
 
@@ -616,22 +619,22 @@ markup language.
 
 ### Referencing issues
 
-The special notation "Fixes #12345" associates the change with issue 12345 in
+The special notation `Fixes #12345` associates the change with issue 12345 in
 the [CUE issue tracker](https://cuelang.org/issue/12345) When this change is
 eventually applied, the issue tracker will automatically mark the issue as
 fixed.
 
 
 If the change is a partial step towards the resolution of the issue, uses the
-notation "Updates #12345".  This will leave a comment in the issue linking back
+notation `Updates #12345`.  This will leave a comment in the issue linking back
 to the change in Gerrit, but it will not close the issue when the change is
 applied.
 
 
+All issues are tracked in the main repository's issue tracker.
 If you are sending a change against a subrepository, you must use the
 fully-qualified syntax supported by GitHub to make sure the change is linked to
-the issue in the main repository, not the subrepository.  All issues are tracked
-in the main repository's issue tracker.  The correct form is "Fixes #159".
+the issue in the main repository, not the subrepository (eg. `Fixes cue-lang/cue#999`).
 
 
 

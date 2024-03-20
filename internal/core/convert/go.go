@@ -275,6 +275,7 @@ func convertRec(ctx *adt.OpContext, nilIsTop bool, x interface{}) adt.Value {
 		res, _ := internal.BaseContext.RoundToIntegralExact(&d, v)
 		if !res.Inexact() {
 			kind = adt.IntKind
+			v = &d
 		}
 		n := &adt.Num{Src: ctx.Source(), K: kind}
 		n.X = *v
@@ -602,7 +603,8 @@ func goTypeToValueRec(ctx *adt.OpContext, allowNullDefault bool, t reflect.Type)
 	// strict instances and there cannot be any tags that further constrain
 	// the values.
 	if t.Implements(jsonMarshaler) || t.Implements(textMarshaler) {
-		return topSentinel, nil
+		e = topSentinel
+		goto store
 	}
 
 	switch k := t.Kind(); k {

@@ -132,7 +132,7 @@ func (d *Dependency) Recurse() {
 	d.visitor.all = d.visitor.recurse
 	d.visitor.top = true
 
-	d.visitor.visit(d.Node, false)
+	d.visitor.visitReusingVisitor(d.Node, false)
 
 	d.visitor.all = savedAll
 	d.visitor.top = savedTop
@@ -186,24 +186,29 @@ func Visit(cfg *Config, c *adt.OpContext, n *adt.Vertex, f VisitFunc) error {
 		panic("nil context")
 	}
 	v := visitor{
-		ctxt:    c,
-		fn:      f,
-		pkg:     cfg.Pkg,
-		recurse: cfg.Descend,
-		all:     cfg.Descend,
-		top:     true,
+		ctxt:       c,
+		fn:         f,
+		pkg:        cfg.Pkg,
+		recurse:    cfg.Descend,
+		all:        cfg.Descend,
+		top:        true,
+		cfgDynamic: cfg.Dynamic,
 	}
+	return v.visitReusingVisitor(n, true)
+}
 
-	if cfg.Dynamic {
-		v.marked = marked{}
-
+// visitReusingVisitor is factored out of Visit so that we may reuse visitor.
+func (v *visitor) visitReusingVisitor(n *adt.Vertex, top bool) error {
+	if v.cfgDynamic {
+		if v.marked == nil {
+			v.marked = marked{}
+		}
 		v.marked.markExpr(n)
 
-		v.dynamic(n, true)
+		v.dynamic(n, top)
 	} else {
-		v.visit(n, true)
+		v.visit(n, top)
 	}
-
 	return v.err
 }
 
@@ -254,6 +259,9 @@ type visitor struct {
 	topRef    adt.Resolver
 	pathStack []refEntry
 	numRefs   int // count of reported dependencies
+
+	// cfgDynamic is kept from the original config.
+	cfgDynamic bool
 
 	marked marked
 }
@@ -478,7 +486,9 @@ func hasLetParent(v *adt.Vertex) bool {
 // markConjuncts transitively marks all reference of the current node.
 func (c *visitor) markConjuncts(v *adt.Vertex) {
 	for _, x := range v.Conjuncts {
-		c.markExpr(x.Env, x.Expr())
+		// Use Elem instead of Expr to preserve the Comprehension to, in turn,
+		// ensure an Environment is inserted for the Value clause.
+		c.markExpr(x.Env, x.Elem())
 	}
 }
 

@@ -1,0 +1,11 @@
+ path=example.com/m@v1
+version=v1.0.0
+hash=h1:pMP6w+M7uoGv0NdCdaJk4KX++ZpbTibPMuqnvDngD48=
+-- cue.mod/module.cue --
+module: "example.com/m"
+-- m.cue --
+package m
+-- foo/bar/hello.cue --
+package main
+
+x: "hello"

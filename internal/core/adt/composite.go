@@ -127,7 +127,7 @@ func (e *Environment) evalCached(c *OpContext, x Expr) Value {
 		// Save and restore errors to ensure that only relevant errors are
 		// associated with the cash.
 		err := c.errs
-		v = c.evalState(x, partial) // TODO: should this be finalized?
+		v = c.evalState(x, require(partial, allKnown)) // TODO: should this be finalized?
 		c.e, c.src = env, src
 		c.errs = err
 		if b, ok := v.(*Bottom); !ok || !b.IsIncomplete() {
@@ -157,12 +157,16 @@ type Vertex struct {
 	//   eval: *,   BaseValue: *   -- finalized
 	//
 	state *nodeContext
-	// TODO: move the following status fields to nodeContext.
+
+	// cc manages the closedness logic for this Vertex. It is created
+	// by rootCloseContext.
+	// TODO: move back to nodeContext, but be sure not to clone it.
+	cc *closeContext
 
 	// Label is the feature leading to this vertex.
 	Label Feature
 
-	// TODO: move the following status fields to nodeContext.
+	// TODO: move the following fields to nodeContext.
 
 	// status indicates the evaluation progress of this vertex.
 	status vertexStatus
@@ -221,6 +225,13 @@ type Vertex struct {
 	// Value  Value
 	Arcs []*Vertex // arcs are sorted in display order.
 
+	// PatternConstraints are additional constraints that match more nodes.
+	// Constraints that match existing Arcs already have their conjuncts
+	// mixed in.
+	// TODO: either put in StructMarker/ListMarker or integrate with Arcs
+	// so that this pointer is unnecessary.
+	PatternConstraints *Constraints
+
 	// Conjuncts lists the structs that ultimately formed this Composite value.
 	// This includes all selected disjuncts.
 	//
@@ -231,6 +242,21 @@ type Vertex struct {
 	// Structs is a slice of struct literals that contributed to this value.
 	// This information is used to compute the topological sort of arcs.
 	Structs []*StructInfo
+}
+
+// rootCloseContext creates a closeContext for this Vertex or returns the
+// existing one.
+func (v *Vertex) rootCloseContext() *closeContext {
+	if v.cc == nil {
+		v.cc = &closeContext{
+			group:           &ConjunctGroup{},
+			parent:          nil,
+			src:             v,
+			parentConjuncts: v,
+		}
+		v.cc.incDependent(ROOT, nil) // matched in REF(decrement:nodeDone)
+	}
+	return v.cc
 }
 
 // newInlineVertex creates a Vertex that is needed for computation, but for
@@ -247,9 +273,21 @@ func (ctx *OpContext) newInlineVertex(parent *Vertex, v BaseValue, a ...Conjunct
 
 // updateArcType updates v.ArcType if t is more restrictive.
 func (v *Vertex) updateArcType(t ArcType) {
-	if t < v.ArcType {
-		v.ArcType = t
+	if t >= v.ArcType {
+		return
 	}
+	if v.ArcType == ArcNotPresent {
+		return
+	}
+	if s := v.state; s != nil && s.ctx.isDevVersion() {
+		c := s.ctx
+		if s.scheduler.frozen.meets(arcTypeKnown) {
+			parent := v.Parent
+			parent.reportFieldCycleError(c, c.Source().Pos(), v.Label)
+			return
+		}
+	}
+	v.ArcType = t
 }
 
 // isDefined indicates whether this arc is a "value" field, and not a constraint
@@ -311,6 +349,22 @@ const (
 	// structure sharing, among other things.
 	// We could also define types for required fields and potentially lets.
 )
+
+func (a ArcType) String() string {
+	switch a {
+	case ArcMember:
+		return "Member"
+	case ArcOptional:
+		return "Optional"
+	case ArcRequired:
+		return "Required"
+	case ArcPending:
+		return "Pending"
+	case ArcNotPresent:
+		return "NotPresent"
+	}
+	return fmt.Sprintf("ArcType(%d)", a)
+}
 
 // definitelyExists reports whether an arc is a constraint or member arc.
 // TODO: we should check that users of this call ensure there are no
@@ -635,13 +689,13 @@ func (v *Vertex) Finalize(c *OpContext) {
 	// case the caller did not handle existing errors in the context.
 	err := c.errs
 	c.errs = nil
-	c.unify(v, finalized)
+	c.unify(v, final(finalized, allKnown))
 	c.errs = err
 }
 
 // CompleteArcs ensures the set of arcs has been computed.
 func (v *Vertex) CompleteArcs(c *OpContext) {
-	c.unify(v, conjuncts)
+	c.unify(v, final(conjuncts, allKnown))
 }
 
 func (v *Vertex) AddErr(ctx *OpContext, b *Bottom) {
@@ -655,6 +709,7 @@ func (v *Vertex) SetValue(ctx *OpContext, value BaseValue) *Bottom {
 
 func (v *Vertex) setValue(ctx *OpContext, state vertexStatus, value BaseValue) *Bottom {
 	v.BaseValue = value
+	// TODO: should not set status here for new evaluator.
 	v.updateStatus(state)
 	return nil
 }
@@ -875,6 +930,8 @@ func (v *Vertex) Elems() []*Vertex {
 // GetArc returns a Vertex for the outgoing arc with label f. It creates and
 // ads one if it doesn't yet exist.
 func (v *Vertex) GetArc(c *OpContext, f Feature, t ArcType) (arc *Vertex, isNew bool) {
+	unreachableForDev(c)
+
 	arc = v.Lookup(f)
 	if arc != nil {
 		arc.updateArcType(t)
@@ -916,7 +973,7 @@ func (v *Vertex) Source() ast.Node {
 
 // AddConjunct adds the given Conjuncts to v if it doesn't already exist.
 func (v *Vertex) AddConjunct(c Conjunct) *Bottom {
-	if v.BaseValue != nil {
+	if v.BaseValue != nil && !isCyclePlaceholder(v.BaseValue) {
 		// TODO: investigate why this happens at all. Removing it seems to
 		// change the order of fields in some cases.
 		//
@@ -939,7 +996,11 @@ func (v *Vertex) hasConjunct(c Conjunct) (added bool) {
 	default:
 		v.ArcType = ArcMember
 	}
-	for _, x := range v.Conjuncts {
+	return hasConjunct(v.Conjuncts, c)
+}
+
+func hasConjunct(cs []Conjunct, c Conjunct) bool {
+	for _, x := range cs {
 		// TODO: disregard certain fields from comparison (e.g. Refs)?
 		if x.CloseInfo.closeInfo == c.CloseInfo.closeInfo &&
 			x.x == c.x &&
@@ -951,6 +1012,8 @@ func (v *Vertex) hasConjunct(c Conjunct) (added bool) {
 }
 
 func (n *nodeContext) addConjunction(c Conjunct, index int) {
+	unreachableForDev(n.ctx)
+
 	// NOTE: This does not split binary expressions for comprehensions.
 	// TODO: split for comprehensions and rewrap?
 	if x, ok := c.Elem().(*BinaryExpr); ok && x.Op == AndOp {
@@ -966,7 +1029,7 @@ func (n *nodeContext) addConjunction(c Conjunct, index int) {
 func (v *Vertex) addConjunctUnchecked(c Conjunct) {
 	index := len(v.Conjuncts)
 	v.Conjuncts = append(v.Conjuncts, c)
-	if n := v.state; n != nil {
+	if n := v.state; n != nil && !n.ctx.isDevVersion() {
 		n.addConjunction(c, index)
 
 		// TODO: can we remove notifyConjunct here? This method is only
@@ -980,6 +1043,8 @@ func (v *Vertex) addConjunctUnchecked(c Conjunct) {
 // addConjunctDynamic adds a conjunct to a vertex and immediately evaluates
 // it, whilst doing the same for any vertices on the notify list, recursively.
 func (n *nodeContext) addConjunctDynamic(c Conjunct) {
+	unreachableForDev(n.ctx)
+
 	n.node.Conjuncts = append(n.node.Conjuncts, c)
 	n.addExprConjunct(c, partial)
 	n.notifyConjunct(c)
@@ -987,7 +1052,10 @@ func (n *nodeContext) addConjunctDynamic(c Conjunct) {
 }
 
 func (n *nodeContext) notifyConjunct(c Conjunct) {
-	for _, arc := range n.notify {
+	unreachableForDev(n.ctx)
+
+	for _, rec := range n.notify {
+		arc := rec.v
 		if !arc.hasConjunct(c) {
 			if arc.state == nil {
 				// TODO: continuing here is likely to result in a faulty

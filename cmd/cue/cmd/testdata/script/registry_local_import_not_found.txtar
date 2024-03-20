@@ -1,0 +1,20 @@
+# TODO: this evaluation should work OK.
+exec cue eval .
+cmp stdout expect-stdout
+-- expect-stdout --
+x: 5
+-- cue.mod/module.cue --
+module: "main.org/foo@v0"
+-- foo.cue --
+package foo
+import "main.org/foo/bar"
+bar
+-- bar/bar.cue --
+package bar
+x: 5
+
+-- _registry/example.com_v0.0.1/cue.mod/module.cue --
+module: "example.com@v0"
+
+-- _registry/example.com_v0.0.1/top.cue --
+package main

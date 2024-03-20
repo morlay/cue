@@ -1,11 +1,13 @@
 package expressions
 
+import "list"
+
 {
     a: 1 // comment
     aaa: 22 // comment
 
     "": 3
-    
+
     b: 3
 
     c: b: a:  4
@@ -140,10 +142,10 @@ package expressions
     e: [...int]
     e: [...int,]
     e: [...int | float]
-    e: [ for x in someObject if x > 9 {
+    e: [for x in someObject if x > 9 {
         x
     }]
-    e: [ for x in someObject if x > 9 {x}]
+    e: [for x in someObject if x > 9 {x}]
     e: [
     for x in someObject
     if x > 9 {x}]
@@ -171,7 +173,7 @@ package expressions
             "\(k)":v
         }
     }
-    
+
     e: { for k, v in someObject if k > "a" {"\(k)":v} }
     e: { for k, v in someObject if k > "a" {
         "\(k)":v }}
@@ -232,4 +234,36 @@ package expressions
 
     "contains		tabs": 123
     @jsonschema(foo="contains		tabs")
+
+    j: cueckoo: _ | [
+        1,
+
+        2,
+    ]
+    k: cueckoo: *[
+        1,
+
+        2,
+    ]
+    l: cueckoo: list.Concat([
+        1,
+
+        2,
+    ])
+
+    m: [1, 2, 3]
+    m: [1, 2, 3,]
+    m: [ 1, 2, 3, ]
+    m: [    1, 2, 3,]
+    m: [     1, 2, 3,]
+    m: [ 1, 2, 3]
+    m: [ 1, 2, 3,]
+    m: [ 1, 2, 3, ]
+    m: [ 1, 2, 3 ]
+    m: [ if true { 1 }, 2, 3]
+    n: [ 1]
+    o: [{}]
+    o: [ {}]
+    o: [{} ]
+    o: [ {} ]
 }

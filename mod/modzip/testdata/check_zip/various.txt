@@ -1,0 +1,19 @@
+path=example.com/various@v1
+version=v1.0.0
+-- want --
+valid:
+valid.go
+
+omitted:
+
+invalid:
+not/../clean: file path is not clean
+invalid.go': malformed file path "invalid.go'": invalid char '\''
+CUE.MOD: cue.mod is not a directory
+valid.go: multiple entries for file "valid.go"
+-- valid.go --
+-- not/../clean --
+-- invalid.go' --
+-- CUE.MOD --
+-- valid.go --
+duplicate

@@ -17,12 +17,16 @@ package cmd
 import (
 	"fmt"
 	"math/rand"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"cuelang.org/go/internal/cueexperiment"
+	"cuelang.org/go/mod/modfile"
+	"cuelang.org/go/mod/module"
+	gomodule "golang.org/x/mod/module"
 )
 
 func newModCmd(c *Command) *cobra.Command {
@@ -44,7 +48,11 @@ func newModCmd(c *Command) *cobra.Command {
 		}),
 	}
 
+	cmd.AddCommand(newModGetCmd(c))
 	cmd.AddCommand(newModInitCmd(c))
+	cmd.AddCommand(newModRegistryCmd(c))
+	cmd.AddCommand(newModTidyCmd(c))
+	cmd.AddCommand(newModUploadCmd(c))
 	return cmd
 }
 
@@ -52,14 +60,13 @@ func newModInitCmd(c *Command) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "init [module]",
 		Short: "initialize new module in current directory",
-		Long: `Init initializes a cue.mod directory in the current directory,
-in effect creating a new module rooted at the current directory.
-The cue.mod directory must not already exist.
-A legacy cue.mod file in the current directory is moved
-to the new subdirectory.
+		Long: `Init initializes a cue.mod directory in the current directory, in effect
+creating a new module rooted at the current directory. The cue.mod
+directory must not already exist. A legacy cue.mod file in the current
+directory is moved to the new subdirectory.
 
-A module name is optional, but if it is not given a packages
-within the module cannot imported another package defined
+A module name is optional, but if it is not given, a package
+within the module cannot import another package defined
 in the module.
 `,
 		RunE: mkRunE(c, runModInit),
@@ -79,18 +86,24 @@ func runModInit(cmd *Command, args []string) (err error) {
 		}
 	}()
 
-	module := ""
+	modulePath := ""
 	if len(args) > 0 {
 		if len(args) != 1 {
 			return fmt.Errorf("too many arguments")
 		}
-		module = args[0]
-		u, err := url.Parse("https://" + module)
-		if err != nil {
-			return fmt.Errorf("invalid module name: %v", module)
-		}
-		if h := u.Hostname(); !strings.Contains(h, ".") {
-			return fmt.Errorf("invalid host name %s", h)
+		modulePath = args[0]
+		if err := module.CheckPath(modulePath); err != nil {
+			// It might just be lacking a major version.
+			if err1 := module.CheckPathWithoutVersion(modulePath); err1 != nil {
+				if strings.Contains(modulePath, "@") {
+					err1 = err
+				}
+				return fmt.Errorf("invalid module name %q: %v", modulePath, err1)
+			}
+			// Default major version to v0 if the modules experiment is enabled.
+			if cueexperiment.Flags.Modules {
+				modulePath += "@v0"
+			}
 		}
 	}
 
@@ -115,20 +128,27 @@ func runModInit(cmd *Command, args []string) (err error) {
 	if err == nil {
 		return fmt.Errorf("cue.mod directory already exists")
 	}
+	mf := &modfile.File{
+		Module: modulePath,
+	}
+	if vers := versionForModFile(); vers != "" {
+		mf.Language = &modfile.Language{
+			Version: vers,
+		}
+	}
 
 	err = os.Mkdir(mod, 0755)
 	if err != nil && !os.IsExist(err) {
 		return err
 	}
 
-	f, err := os.Create(filepath.Join(mod, "module.cue"))
+	data, err := mf.Format()
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-
-	// Set module even if it is empty, making it easier for users to fill it in.
-	_, err = fmt.Fprintf(f, "module: %q\n", module)
+	if err := os.WriteFile(filepath.Join(mod, "module.cue"), data, 0o666); err != nil {
+		return err
+	}
 
 	if err = os.Mkdir(filepath.Join(mod, "usr"), 0755); err != nil {
 		return err
@@ -172,4 +192,17 @@ func backport(mod, cwd string) error {
 	}
 
 	return nil
+}
+
+func versionForModFile() string {
+	version := cueVersion()
+	if gomodule.IsPseudoVersion(version) {
+		// If we have a version like v0.7.1-0.20240130142347-7855e15cb701
+		// we want it to turn into the base version (v0.7.0 in that example).
+		// If there's no base version (e.g. v0.0.0-...) then PseudoVersionBase
+		// will return the empty string, which is exactly what we want
+		// because we don't want to put v0.0.0 in a module.cue file.
+		version, _ = gomodule.PseudoVersionBase(version)
+	}
+	return version
 }

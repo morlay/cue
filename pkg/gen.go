@@ -28,20 +28,20 @@ import (
 	_ "embed"
 	"flag"
 	"fmt"
-	"go/ast"
-	gobuild "go/build"
 	"go/constant"
 	"go/format"
-	"go/parser"
-	"go/printer"
 	"go/token"
+	"go/types"
 	"log"
 	"math/big"
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 	"text/template"
+
+	"golang.org/x/tools/go/packages"
 
 	"cuelang.org/go/cue"
 	"cuelang.org/go/cue/build"
@@ -55,8 +55,6 @@ const genFile = "pkg.go"
 
 //go:embed packages.txt
 var packagesStr string
-
-var packages = strings.Fields(packagesStr)
 
 type headerParams struct {
 	GoPkg  string
@@ -89,12 +87,15 @@ var _ = adt.TopKind // in case the adt package isn't used
 {{end}}
 `))
 
+const pkgParent = "cuelang.org/go/pkg"
+
 func main() {
 	flag.Parse()
 	log.SetFlags(log.Lshortfile)
 	log.SetOutput(os.Stdout)
 
-	for _, pkg := range packages {
+	var packagesList []string
+	for _, pkg := range strings.Fields(packagesStr) {
 		if pkg == "path" {
 			// TODO remove this special case. Currently the path
 			// pkg.go file cannot be generated automatically but that
@@ -102,6 +103,19 @@ func main() {
 			// to builtin functions.
 			continue
 		}
+		packagesList = append(packagesList, path.Join(pkgParent, pkg))
+	}
+
+	cfg := &packages.Config{Mode: packages.NeedName | packages.NeedFiles | packages.NeedTypes}
+	pkgs, err := packages.Load(cfg, packagesList...)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "load: %v\n", err)
+		os.Exit(1)
+	}
+	if packages.PrintErrors(pkgs) > 0 {
+		os.Exit(1)
+	}
+	for _, pkg := range pkgs {
 		if err := generate(pkg); err != nil {
 			log.Fatalf("%s: %v", pkg, err)
 		}
@@ -112,27 +126,25 @@ type generator struct {
 	dir        string
 	w          *bytes.Buffer
 	cuePkgPath string
-	fset       *token.FileSet
 	first      bool
 }
 
-func generate(cuePkgPath string) error {
-	goPkgPath := path.Join("cuelang.org/go/pkg", cuePkgPath)
-	pkg, err := gobuild.Import(goPkgPath, "", 0)
-	if err != nil {
-		return err
-	}
-
+func generate(pkg *packages.Package) error {
+	// go/packages supports multiple build systems, including some which don't keep
+	// a Go package entirely within a single directory.
+	// However, we know for certain that CUE uses modules, so it is the case here.
+	// We can figure out the directory from the first Go file.
+	pkgDir := filepath.Dir(pkg.GoFiles[0])
+	cuePkg := strings.TrimPrefix(pkg.PkgPath, pkgParent+"/")
 	g := generator{
-		dir:        pkg.Dir,
-		cuePkgPath: cuePkgPath,
+		dir:        pkgDir,
+		cuePkgPath: cuePkg,
 		w:          &bytes.Buffer{},
-		fset:       token.NewFileSet(),
 	}
 
 	params := headerParams{
 		GoPkg:  pkg.Name,
-		CUEPkg: cuePkgPath,
+		CUEPkg: cuePkg,
 	}
 	// As a special case, the "tool" package cannot be imported from CUE.
 	skipRegister := params.CUEPkg == "tool"
@@ -140,8 +152,8 @@ func generate(cuePkgPath string) error {
 		params.CUEPkg = ""
 	}
 
-	if doc, err := os.ReadFile(filepath.Join(pkg.Dir, "doc.txt")); err == nil {
-		defs, err := os.ReadFile(filepath.Join(pkg.Dir, pkg.Name+".cue"))
+	if doc, err := os.ReadFile(filepath.Join(pkgDir, "doc.txt")); err == nil {
+		defs, err := os.ReadFile(filepath.Join(pkgDir, pkg.Name+".cue"))
 		if err != nil {
 			return err
 		}
@@ -160,11 +172,8 @@ func generate(cuePkgPath string) error {
 	if !skipRegister {
 		fmt.Fprintf(g.w, "var p = &pkg.Package{\nNative: []*pkg.Builtin{")
 		g.first = true
-		for _, filename := range pkg.GoFiles {
-			if filename == genFile {
-				continue
-			}
-			g.processGo(filepath.Join(pkg.Dir, filename))
+		if err := g.processGo(pkg); err != nil {
+			return err
 		}
 		fmt.Fprintf(g.w, "},\n")
 		if err := g.processCUE(); err != nil {
@@ -175,10 +184,11 @@ func generate(cuePkgPath string) error {
 
 	b, err := format.Source(g.w.Bytes())
 	if err != nil {
+		fmt.Printf("go/format error on %s: %v\n", pkg.PkgPath, err)
 		b = g.w.Bytes() // write the unformatted source
 	}
 
-	filename := filepath.Join(pkg.Dir, genFile)
+	filename := filepath.Join(pkgDir, genFile)
 
 	if err := os.WriteFile(filename, b, 0666); err != nil {
 		return err
@@ -218,101 +228,84 @@ func (g *generator) processCUE() error {
 		return err
 	}
 	b = bytes.ReplaceAll(b, []byte("\n\n"), []byte("\n"))
-	// body = strings.ReplaceAll(body, "\t", "")
-	// TODO: escape backtick
-	fmt.Fprintf(g.w, "CUE: `%s`,\n", string(b))
+	// Try to use a Go string with backquotes, for readability.
+	// If not possible due to cueSrc itself having backquotes,
+	// use a single-line double quoted string, removing tabs for brevity.
+	// We don't use strconv.CanBackquote as it is for quoting as a single line.
+	if cueSrc := string(b); !strings.Contains(cueSrc, "`") {
+		fmt.Fprintf(g.w, "CUE: `%s`,\n", cueSrc)
+	} else {
+		cueSrc = strings.ReplaceAll(cueSrc, "\t", "")
+		fmt.Fprintf(g.w, "CUE: %q,\n", cueSrc)
+	}
 	return nil
 }
 
-func (g *generator) processGo(filename string) error {
-	f, err := parser.ParseFile(g.fset, filename, nil, parser.ParseComments)
-	if err != nil {
-		return err
+func (g *generator) processGo(pkg *packages.Package) error {
+	// We sort the objects by their original source code position.
+	// Otherwise go/types defaults to sorting by name strings.
+	// We could remove this code if we were fine with sorting by name.
+	scope := pkg.Types.Scope()
+	type objWithPos struct {
+		obj types.Object
+		pos token.Position
 	}
+	var objs []objWithPos
+	for _, name := range scope.Names() {
+		obj := scope.Lookup(name)
+		objs = append(objs, objWithPos{obj, pkg.Fset.Position(obj.Pos())})
+	}
+	sort.Slice(objs, func(i, j int) bool {
+		obj1, obj2 := objs[i], objs[j]
+		if obj1.pos.Filename == obj2.pos.Filename {
+			return obj1.pos.Line < obj2.pos.Line
+		}
+		return obj1.pos.Filename < obj2.pos.Filename
+	})
 
-	for _, d := range f.Decls {
-		switch x := d.(type) {
-		case *ast.GenDecl:
-			switch x.Tok {
-			case token.CONST:
-				for _, spec := range x.Specs {
-					spec := spec.(*ast.ValueSpec)
-					if ast.IsExported(spec.Names[0].Name) {
-						g.genConst(spec)
-					}
-				}
-			case token.VAR:
-				continue
-			case token.TYPE:
-				// TODO: support type declarations.
-				continue
-			case token.IMPORT:
-				continue
+	for _, obj := range objs {
+		obj := obj.obj // no longer need the token.Position
+		if !obj.Exported() {
+			continue
+		}
+		// TODO: support type declarations.
+		switch obj := obj.(type) {
+		case *types.Const:
+			var value string
+			switch v := obj.Val(); v.Kind() {
+			case constant.Bool, constant.Int, constant.String:
+				// TODO: convert octal numbers
+				value = v.ExactString()
+			case constant.Float:
+				var rat big.Rat
+				rat.SetString(v.ExactString())
+				var float big.Float
+				float.SetRat(&rat)
+				value = float.Text('g', -1)
 			default:
-				panic(fmt.Errorf("gen %s: unexpected spec of type %s", filename, x.Tok))
+				fmt.Printf("Dropped entry %s.%s (%T: %v)\n", g.cuePkgPath, obj.Name(), v.Kind(), v.ExactString())
+				continue
 			}
-		case *ast.FuncDecl:
-			g.genFunc(x)
+			g.sep()
+			fmt.Fprintf(g.w, "{\nName: %q,\n Const: %q,\n}", obj.Name(), value)
+		case *types.Func:
+			g.genFunc(obj)
 		}
 	}
 	return nil
 }
 
-func (g *generator) genConst(spec *ast.ValueSpec) {
-	name := spec.Names[0].Name
-	value := ""
-	switch v := g.toValue(spec.Values[0]); v.Kind() {
-	case constant.Bool, constant.Int, constant.String:
-		// TODO: convert octal numbers
-		value = v.ExactString()
-	case constant.Float:
-		var rat big.Rat
-		rat.SetString(v.ExactString())
-		var float big.Float
-		float.SetRat(&rat)
-		value = float.Text('g', -1)
-	default:
-		fmt.Printf("Dropped entry %s.%s (%T: %v)\n", g.cuePkgPath, name, v.Kind(), v.ExactString())
-		return
-	}
-	g.sep()
-	fmt.Fprintf(g.w, "{\nName: %q,\n Const: %q,\n}", name, value)
-}
+var errorType = types.Universe.Lookup("error").Type()
 
-func (g *generator) toValue(x ast.Expr) constant.Value {
-	switch x := x.(type) {
-	case *ast.BasicLit:
-		return constant.MakeFromLiteral(x.Value, x.Kind, 0)
-	case *ast.BinaryExpr:
-		return constant.BinaryOp(g.toValue(x.X), x.Op, g.toValue(x.Y))
-	case *ast.UnaryExpr:
-		return constant.UnaryOp(x.Op, g.toValue(x.X), 0)
-	default:
-		panic(fmt.Errorf("%s: unsupported expression type %T: %#v", g.cuePkgPath, x, x))
-	}
-}
-
-func (g *generator) genFunc(x *ast.FuncDecl) {
-	if x.Body == nil || !ast.IsExported(x.Name.Name) {
+func (g *generator) genFunc(fn *types.Func) {
+	sign := fn.Type().(*types.Signature)
+	if sign.Recv() != nil {
 		return
 	}
-	types := []string{}
-	if x.Type.Results != nil {
-		for _, f := range x.Type.Results.List {
-			if len(f.Names) > 0 {
-				for range f.Names {
-					types = append(types, g.goKind(f.Type))
-				}
-			} else {
-				types = append(types, g.goKind(f.Type))
-			}
-		}
-	}
-	if x.Recv != nil {
-		return
-	}
-	if n := len(types); n != 1 && (n != 2 || types[1] != "error") {
-		fmt.Printf("Dropped func %s.%s: must have one return value or a value and an error %v\n", g.cuePkgPath, x.Name.Name, types)
+	params := sign.Params()
+	results := sign.Results()
+	if results == nil || (results.Len() != 1 && results.At(1).Type() != errorType) {
+		fmt.Printf("Dropped func %s.%s: must have one return value or a value and an error %v\n", g.cuePkgPath, fn.Name(), sign)
 		return
 	}
 
@@ -320,19 +313,18 @@ func (g *generator) genFunc(x *ast.FuncDecl) {
 	fmt.Fprintf(g.w, "{\n")
 	defer fmt.Fprintf(g.w, "}")
 
-	fmt.Fprintf(g.w, "Name: %q,\n", x.Name.Name)
+	fmt.Fprintf(g.w, "Name: %q,\n", fn.Name())
 
 	args := []string{}
 	vals := []string{}
 	kind := []string{}
-	for _, f := range x.Type.Params.List {
-		for _, name := range f.Names {
-			typ := strings.Title(g.goKind(f.Type))
-			argKind := g.goToCUE(f.Type)
-			vals = append(vals, fmt.Sprintf("c.%s(%d)", typ, len(args)))
-			args = append(args, name.Name)
-			kind = append(kind, argKind)
-		}
+	for i := 0; i < params.Len(); i++ {
+		param := params.At(i)
+		typ := strings.Title(g.goKind(param.Type()))
+		argKind := g.goToCUE(param.Type())
+		vals = append(vals, fmt.Sprintf("c.%s(%d)", typ, len(args)))
+		args = append(args, param.Name())
+		kind = append(kind, argKind)
 	}
 
 	fmt.Fprintf(g.w, "Params: []pkg.Param{\n")
@@ -341,8 +333,7 @@ func (g *generator) genFunc(x *ast.FuncDecl) {
 	}
 	fmt.Fprintf(g.w, "\n},\n")
 
-	expr := x.Type.Results.List[0].Type
-	fmt.Fprintf(g.w, "Result: %s,\n", g.goToCUE(expr))
+	fmt.Fprintf(g.w, "Result: %s,\n", g.goToCUE(results.At(0).Type()))
 
 	argList := strings.Join(args, ", ")
 	valList := strings.Join(vals, ", ")
@@ -359,45 +350,45 @@ func (g *generator) genFunc(x *ast.FuncDecl) {
 	}
 	fmt.Fprintln(g.w, "if c.Do() {")
 	defer fmt.Fprintln(g.w, "}")
-	if len(types) == 1 {
-		fmt.Fprintf(g.w, "c.Ret = %s(%s)", x.Name.Name, argList)
+	if results.Len() == 1 {
+		fmt.Fprintf(g.w, "c.Ret = %s(%s)", fn.Name(), argList)
 	} else {
-		fmt.Fprintf(g.w, "c.Ret, c.Err = %s(%s)", x.Name.Name, argList)
+		fmt.Fprintf(g.w, "c.Ret, c.Err = %s(%s)", fn.Name(), argList)
 	}
 }
 
-func (g *generator) goKind(expr ast.Expr) string {
-	if star, isStar := expr.(*ast.StarExpr); isStar {
-		expr = star.X
+// TODO(mvdan): goKind and goToCUE still use a lot of strings; simplify.
+
+func (g *generator) goKind(typ types.Type) string {
+	if ptr, ok := typ.(*types.Pointer); ok {
+		typ = ptr.Elem()
 	}
-	w := &bytes.Buffer{}
-	printer.Fprint(w, g.fset, expr)
-	switch str := w.String(); str {
-	case "big.Int":
+	switch str := types.TypeString(typ, nil); str {
+	case "math/big.Int":
 		return "bigInt"
-	case "big.Float":
+	case "math/big.Float":
 		return "bigFloat"
-	case "big.Rat":
+	case "math/big.Rat":
 		return "bigRat"
-	case "adt.Bottom":
+	case "cuelang.org/go/internal/core/adt.Bottom":
 		return "error"
-	case "internal.Decimal":
+	case "github.com/cockroachdb/apd/v3.Decimal":
 		return "decimal"
-	case "pkg.List":
+	case "cuelang.org/go/internal/pkg.List":
 		return "cueList"
-	case "pkg.Struct":
+	case "cuelang.org/go/internal/pkg.Struct":
 		return "struct"
-	case "[]*internal.Decimal":
+	case "[]*github.com/cockroachdb/apd/v3.Decimal":
 		return "decimalList"
-	case "cue.Value":
+	case "cuelang.org/go/cue.Value":
 		return "value"
-	case "cue.List":
+	case "cuelang.org/go/cue.List":
 		return "list"
 	case "[]string":
 		return "stringList"
 	case "[]byte":
 		return "bytes"
-	case "[]cue.Value":
+	case "[]cuelang.org/go/cue.Value":
 		return "list"
 	case "io.Reader":
 		return "reader"
@@ -408,9 +399,9 @@ func (g *generator) goKind(expr ast.Expr) string {
 	}
 }
 
-func (g *generator) goToCUE(expr ast.Expr) (cueKind string) {
+func (g *generator) goToCUE(typ types.Type) (cueKind string) {
 	// TODO: detect list and structs types for return values.
-	switch k := g.goKind(expr); k {
+	switch k := g.goKind(typ); k {
 	case "error":
 		cueKind += "adt.BottomKind"
 	case "bool":

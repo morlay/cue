@@ -25,6 +25,7 @@ package tdtest
 import (
 	"fmt"
 	"go/token"
+	"path/filepath"
 	"reflect"
 	"runtime"
 	"strings"
@@ -40,9 +41,6 @@ import (
 // - make name field explicit, i.e. Name("name"), field tag, or tdtest.Name type.
 // - allow "skip" field. Again either SkipName("skip"), tag, or Skip type.
 // - allow for tdtest:"noupdate" field tag.
-// - should we derive names from field names? This would require always
-//   loading the packages data upon error. Could be an option to disable, or
-//   implicitly it would only be loaded if there is an error without message.
 // - Option: allow ignore field that lists a set of fields to not be tested
 //   for that particular test case: ignore: tdtest.Ignore("want1", "want2")
 //
@@ -64,6 +62,8 @@ type set[TC any] struct {
 }
 
 // Run runs the given function for each (selected) element in the table.
+// TC must be a struct type. If that has a string field named "name",
+// that value will be used to name the associated subtest.
 func Run[TC any](t *testing.T, table []TC, fn func(t *T, tc *TC)) {
 	s := &set[TC]{
 		t:             t,
@@ -113,6 +113,10 @@ func (t *T) getCallInfo() (*info, *callInfo) {
 	if !ok {
 		t.Fatalf("could not update file for test %s", t.Name())
 	}
+	// Note: it seems that sometimes the file returned by Caller
+	// might not be in canonical format (under Windows, it can contain
+	// forward slashes), so clean it.
+	file = filepath.Clean(file)
 	info := t.info(file)
 	return info, info.calls[token.Position{Filename: file, Line: line}]
 }
@@ -165,6 +169,7 @@ func (t *T) Select(tests ...any) {
 				return
 			}
 		case string:
+			n = strings.ReplaceAll(n, " ", "_")
 			if n == parts[len(parts)-1] {
 				return
 			}

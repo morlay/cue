@@ -24,7 +24,7 @@ import (
 	"cuelang.org/go/internal/core/runtime"
 )
 
-// An InstanceOrValue is implemented by Value and *Instance.
+// An InstanceOrValue is implemented by [Value] and *[Instance].
 //
 // This is a placeholder type that is used to allow Instance-based APIs to
 // transition to Value-based APIs. The goals is to get rid of the Instance
@@ -38,11 +38,15 @@ type InstanceOrValue interface {
 func (Value) internal()     {}
 func (*Instance) internal() {}
 
-// Value implements value.Instance.
+// Value implements [InstanceOrValue].
 func (v hiddenValue) Value() Value { return v }
 
 // An Instance defines a single configuration based on a collection of
 // underlying CUE files.
+//
+// Use of this type is being phased out in favor of [Value].
+// Any APIs currently taking an Instance should use [InstanceOrValue]
+// to transition to the new type without breaking users.
 type Instance struct {
 	index *runtime.Runtime
 
@@ -285,10 +289,6 @@ func (inst *hiddenInstance) Build(p *build.Instance) *Instance {
 	return i
 }
 
-func (inst *Instance) value() Value {
-	return newVertexRoot(inst.index, newContext(inst.index), inst.root)
-}
-
 // Lookup reports the value at a path starting from the top level struct. The
 // Exists method of the returned value will report false if the path did not
 // exist. The Err method reports if any error occurred during evaluation. The
@@ -297,7 +297,7 @@ func (inst *Instance) value() Value {
 //
 // Deprecated: use Value.LookupPath
 func (inst *hiddenInstance) Lookup(path ...string) Value {
-	return inst.value().Lookup(path...)
+	return inst.Value().Lookup(path...)
 }
 
 // LookupDef reports the definition with the given name within struct v. The
@@ -306,7 +306,7 @@ func (inst *hiddenInstance) Lookup(path ...string) Value {
 //
 // Deprecated: use Value.LookupPath
 func (inst *hiddenInstance) LookupDef(path string) Value {
-	return inst.value().LookupDef(path)
+	return inst.Value().LookupDef(path)
 }
 
 // LookupField reports a Field at a path starting from v, or an error if the
@@ -319,7 +319,7 @@ func (inst *hiddenInstance) LookupDef(path string) Value {
 //
 // Deprecated: use Value.LookupPath
 func (inst *hiddenInstance) LookupField(path ...string) (f FieldInfo, err error) {
-	v := inst.value()
+	v := inst.Value()
 	for _, k := range path {
 		s, err := v.Struct()
 		if err != nil {

@@ -1,0 +1,5 @@
+path=example.com/m@v1
+version=v1.0.0
+wantErr=create zip: CUE.MOD/MODULE.CUE: cue.mod directories must have lowercase names
+-- CUE.MOD/MODULE.CUE --
+module: "example.com/m"

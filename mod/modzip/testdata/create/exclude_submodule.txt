@@ -1,0 +1,10 @@
+path=example.com/m@v1
+version=v1.0.0
+hash=h1:W4OVf+GhuR8uGVPxUsw60LKchTUbx+6hPgZygdB2reM=
+-- cue.mod/module.cue --
+module: "example.com/m"
+
+-- sub/cue.mod/module.cue --
+module: "example.com/m/sub"
+-- sub/x.go' --
+invalid name, but this shouldn't be read

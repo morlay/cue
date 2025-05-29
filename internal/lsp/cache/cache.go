@@ -11,12 +11,22 @@ import (
 	"cuelang.org/go/mod/modconfig"
 )
 
-// New creates a new Cache.
-func New() (*Cache, error) {
+type DefaultRegistryBuildFunc = func() (modconfig.Registry, error)
+
+var defaultRegistryBuildFunc DefaultRegistryBuildFunc = func() (modconfig.Registry, error) {
 	modcfg := &modconfig.Config{
 		ClientType: "cuelsp",
 	}
-	reg, err := modconfig.NewRegistry(modcfg)
+	return modconfig.NewRegistry(modcfg)
+}
+
+func SetDefaultRegistryFunc(f DefaultRegistryBuildFunc) {
+	defaultRegistryBuildFunc = f
+}
+
+// New creates a new Cache.
+func New() (*Cache, error) {
+	reg, err := defaultRegistryBuildFunc()
 	if err != nil {
 		return nil, err
 	}
